@@ -118,7 +118,9 @@ class LettaAgent(BaseAgent):
         self.logger = get_logger(agent_id)
 
         # TODO: Expand to more
-        if enable_summarization and model_settings.openai_api_key:
+        if enable_summarization:
+            # Create summarization agent regardless of OpenAI key for Google AI setups
+            # The dummy OpenAI key allows summarizer creation while using Google AI for actual LLM calls
             self.summarization_agent = EphemeralSummaryAgent(
                 target_block_label=self.summary_block_label,
                 agent_id=agent_id,
@@ -1382,7 +1384,7 @@ class LettaAgent(BaseAgent):
                     f"{NON_USER_MSG_PREFIX}Continuing, user expects these tools: [" f"{', '.join(uncalled)}] to be called still."
                 )
 
-                stop_reason = None  # reset – we’re still going
+                stop_reason = None  # reset – we're still going
 
         return continue_stepping, heartbeat_reason, stop_reason
 

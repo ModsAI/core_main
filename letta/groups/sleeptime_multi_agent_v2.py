@@ -24,6 +24,8 @@ from letta.services.message_manager import MessageManager
 from letta.services.passage_manager import PassageManager
 from letta.services.step_manager import NoopStepManager, StepManager
 from letta.services.telemetry_manager import NoopTelemetryManager, TelemetryManager
+from letta.settings import summarizer_settings
+from letta.schemas.summarization import SummarizationMode
 
 
 class SleeptimeMultiAgentV2(BaseAgent):
@@ -92,6 +94,11 @@ class SleeptimeMultiAgentV2(BaseAgent):
             step_manager=self.step_manager,
             telemetry_manager=self.telemetry_manager,
             current_run_id=self.current_run_id,
+            # Add summarization settings that respect environment variables
+            message_buffer_limit=summarizer_settings.message_buffer_limit,
+            message_buffer_min=summarizer_settings.message_buffer_min,
+            enable_summarization=summarizer_settings.enable_summarization,
+            # Note: summarizer_mode parameter removed as it's not accepted by LettaAgent constructor
         )
         # Perform foreground agent step
         response = await foreground_agent.step(

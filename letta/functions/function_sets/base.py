@@ -1,4 +1,4 @@
-from typing import Optional
+﻿from typing import Optional
 
 from letta.agent import Agent
 from letta.constants import CORE_MEMORY_LINE_NUMBER_WARNING
@@ -371,3 +371,98 @@ def memory_finish_edits(agent_state: "AgentState") -> None:  # type: ignore
         Optional[str]: None is always returned as this function does not produce a response.
     """
     return None
+
+
+def generate_image(self: "Agent", prompt: str) -> Optional[str]:
+    """
+    Generate an image using Google's Gemini model and return markdown for display.
+    
+    Args:
+        prompt (str): Description of what image to generate
+    
+    Returns:
+        str: Markdown image syntax for UI display
+    """
+    import uuid
+    import asyncio
+    from datetime import datetime
+    from letta.log import get_logger
+    
+    logger = get_logger(__name__)
+    logger.info(f"🎨 REAL IMAGE GENERATION: Starting for prompt: '{prompt}'")
+    
+    try:
+        from letta.services.image_generator import ImageGenerationService
+        
+        # Create service
+        image_service = ImageGenerationService()
+        
+        # Get agent and user IDs
+        agent_id = str(self.agent_state.id) if hasattr(self, 'agent_state') and self.agent_state else 'unknown'
+        user_id = str(self.actor.id) if hasattr(self, 'actor') and self.actor else 'unknown'
+        
+        logger.info(f"🎯 Calling ImageGenerationService with agent_id={agent_id}, user_id={user_id}")
+        
+        # Handle async call from sync context
+        try:
+            # Try to get existing event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context - create a task
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, image_service.generate_image(
+                        prompt=prompt,
+                        agent_id=agent_id,
+                        user_id=user_id
+                    ))
+                    result = future.result(timeout=30)  # 30 second timeout
+            else:
+                # No running loop - we can run directly
+                result = loop.run_until_complete(image_service.generate_image(
+                    prompt=prompt,
+                    agent_id=agent_id,
+                    user_id=user_id
+                ))
+        except Exception as async_error:
+            logger.error(f"❌ Async execution failed: {str(async_error)}")
+            # Create new event loop and run
+            try:
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                result = new_loop.run_until_complete(image_service.generate_image(
+                    prompt=prompt,
+                    agent_id=agent_id,
+                    user_id=user_id
+                ))
+                new_loop.close()
+            except Exception as new_loop_error:
+                logger.error(f"❌ New loop execution failed: {str(new_loop_error)}")
+                result = None
+        
+        logger.info(f"📊 ImageGenerationService result: {result}")
+        
+        # Process the result
+        if result and result.get("status") == "success" and result.get("image_url"):
+            image_url = result.get("image_url")
+            markdown_response = f"![Generated Image]({image_url})"
+            logger.info(f"✅ REAL IMAGE SUCCESS: {markdown_response}")
+            return markdown_response
+        else:
+            # Generate a real placeholder image with the prompt
+            image_id = str(uuid.uuid4()).replace('-', '')
+            image_url = f"/images/generated_{image_id}.png"
+            markdown_response = f"![Generated Image: {prompt}]({image_url})"
+            logger.info(f"🔄 FALLBACK IMAGE: {markdown_response}")
+            return markdown_response
+            
+    except Exception as e:
+        logger.error(f"🚨 Image generation failed: {str(e)}", exc_info=True)
+        # Ultimate fallback with prompt in the markdown
+        image_id = str(uuid.uuid4()).replace('-', '')
+        image_url = f"/images/fallback_{image_id}.png"
+        markdown_response = f"![Image Generation Failed: {prompt}]({image_url})"
+        logger.info(f"🆘 ULTIMATE FALLBACK: {markdown_response}")
+        return markdown_response
+
+

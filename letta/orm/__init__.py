@@ -28,4 +28,5 @@ from letta.orm.sources_agents import SourcesAgents
 from letta.orm.step import Step
 from letta.orm.tool import Tool
 from letta.orm.tools_agents import ToolsAgents
+from letta.orm.unity_character import UnityCharacter
 from letta.orm.user import User

@@ -1,0 +1,372 @@
+"""
+Story Manager Service
+
+Handles story upload, parsing, and retrieval.
+Converts TypeScript story JSON to our internal format.
+"""
+
+import json
+import uuid
+from datetime import datetime
+from typing import Dict, List, Optional
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+from letta.log import get_logger
+from letta.orm.story import Story as StoryORM
+from letta.schemas.story import (
+    Scene,
+    Story,
+    StoryCharacter,
+    StoryInstruction,
+    StoryUpload,
+    StoryUploadResponse,
+)
+from letta.schemas.user import User
+from letta.server.db import db_registry
+
+logger = get_logger(__name__)
+
+
+class StoryManager:
+    """
+    Manages story operations: upload, parse, retrieve, delete.
+    
+    Key responsibilities:
+    1. Parse TypeScript story JSON
+    2. Extract scenes from instructions
+    3. Generate dialogue beats
+    4. Store in database
+    5. Handle errors gracefully
+    """
+
+    def __init__(self):
+        self.db = db_registry.get_db()
+        logger.info("📚 StoryManager initialized")
+
+    async def upload_story(
+        self,
+        story_upload: StoryUpload,
+        actor: User,
+    ) -> StoryUploadResponse:
+        """
+        Upload and process a story.
+        
+        Process:
+        1. Validate story structure
+        2. Generate character IDs
+        3. Parse instructions into scenes
+        4. Extract dialogue beats
+        5. Store in database
+        
+        Args:
+            story_upload: Story data from TypeScript
+            actor: User uploading the story
+            
+        Returns:
+            Upload response with story details
+            
+        Raises:
+            ValueError: Invalid story structure
+            IntegrityError: Story ID already exists
+            Exception: Other database/processing errors
+        """
+        logger.info(f"📤 Uploading story: {story_upload.title} (ID: {story_upload.id})")
+        
+        try:
+            # Step 1: Generate story_id
+            story_id = f"story-{story_upload.id}"
+            
+            # Step 2: Process characters (add character_id)
+            characters = self._process_characters(story_upload.characters)
+            logger.debug(f"✅ Processed {len(characters)} characters")
+            
+            # Step 3: Parse instructions into scenes
+            scenes = self._parse_scenes(story_upload.instructions, characters)
+            logger.debug(f"✅ Parsed {len(scenes)} scenes")
+            
+            # Step 4: Validate scene structure
+            self._validate_scenes(scenes)
+            
+            # Step 5: Store in database
+            async with self.db.get_async_session() as session:
+                # Check if story already exists
+                existing_check = select(StoryORM).where(StoryORM.story_id == story_id)
+                result = await session.execute(existing_check)
+                existing_story = result.scalar_one_or_none()
+                
+                if existing_story:
+                    logger.error(f"❌ Story ID '{story_id}' already exists")
+                    raise IntegrityError(
+                        f"Story ID '{story_id}' already exists",
+                        None,
+                        None
+                    )
+                
+                # Create ORM object
+                story_orm = StoryORM(
+                    id=f"story-{uuid.uuid4()}",
+                    story_id=story_id,
+                    title=story_upload.title,
+                    description=story_upload.description,
+                    story_json=story_upload.dict(),  # Original JSON
+                    scenes_json={"scenes": [scene.dict() for scene in scenes]},  # Processed scenes
+                    metadata={
+                        "character_count": len(characters),
+                        "scene_count": len(scenes),
+                        "instruction_count": len(story_upload.instructions),
+                        "tags": story_upload.tags or [],
+                    },
+                    organization_id=actor.organization_id,
+                )
+                
+                session.add(story_orm)
+                await session.commit()
+                await session.refresh(story_orm)
+                
+                logger.info(f"✅ Successfully uploaded story: {story_upload.title}")
+                
+                return StoryUploadResponse(
+                    success=True,
+                    story_id=story_id,
+                    title=story_upload.title,
+                    scene_count=len(scenes),
+                    character_count=len(characters),
+                    instructions=[
+                        f"Story '{story_upload.title}' uploaded successfully",
+                        f"Story ID: {story_id}",
+                        f"Scenes: {len(scenes)}",
+                        f"Characters: {len(characters)}",
+                        f"Start a session with: POST /api/v1/story/sessions/start",
+                    ],
+                )
+        
+        except IntegrityError as e:
+            logger.error(f"❌ Story upload failed (duplicate): {e}")
+            raise ValueError(f"Story with ID {story_upload.id} already exists") from e
+        
+        except ValueError as e:
+            logger.error(f"❌ Story upload failed (validation): {e}")
+            raise
+        
+        except SQLAlchemyError as e:
+            logger.error(f"❌ Story upload failed (database): {e}", exc_info=True)
+            raise Exception(f"Database error during story upload: {str(e)}") from e
+        
+        except Exception as e:
+            logger.error(f"❌ Story upload failed (unexpected): {e}", exc_info=True)
+            raise Exception(f"Failed to upload story: {str(e)}") from e
+
+    async def get_story(
+        self,
+        story_id: str,
+        actor: User,
+    ) -> Optional[Story]:
+        """
+        Retrieve a story by ID.
+        
+        Args:
+            story_id: Story identifier
+            actor: User requesting the story
+            
+        Returns:
+            Story object or None if not found
+        """
+        logger.debug(f"🔍 Getting story: {story_id}")
+        
+        try:
+            async with self.db.get_async_session() as session:
+                query = select(StoryORM).where(
+                    StoryORM.story_id == story_id,
+                    StoryORM.organization_id == actor.organization_id,
+                )
+                result = await session.execute(query)
+                story_orm = result.scalar_one_or_none()
+                
+                if not story_orm:
+                    logger.warning(f"❌ Story not found: {story_id}")
+                    return None
+                
+                # Convert to schema
+                scenes = [Scene(**scene) for scene in story_orm.scenes_json["scenes"]]
+                characters = [StoryCharacter(**char) for char in story_orm.story_json["characters"]]
+                
+                story = Story(
+                    story_id=story_orm.story_id,
+                    title=story_orm.title,
+                    description=story_orm.description,
+                    characters=characters,
+                    scenes=scenes,
+                    metadata=story_orm.metadata or {},
+                )
+                
+                logger.debug(f"✅ Found story: {story.title}")
+                return story
+        
+        except Exception as e:
+            logger.error(f"❌ Failed to get story {story_id}: {e}", exc_info=True)
+            return None
+
+    def _process_characters(self, characters: List[StoryCharacter]) -> List[StoryCharacter]:
+        """
+        Process characters: generate character_id, validate.
+        
+        Args:
+            characters: Raw characters from upload
+            
+        Returns:
+            Processed characters with IDs
+        """
+        processed = []
+        seen_ids = set()
+        
+        for char in characters:
+            # Generate character_id from name (lowercase, replace spaces with underscores)
+            char_id = char.name.lower().replace(" ", "_").replace("'", "")
+            
+            # Ensure uniqueness
+            if char_id in seen_ids:
+                char_id = f"{char_id}_{len(seen_ids)}"
+            seen_ids.add(char_id)
+            
+            # Create new character with ID
+            processed_char = StoryCharacter(
+                name=char.name,
+                sex=char.sex,
+                age=char.age,
+                is_main_character=char.is_main_character,
+                model=char.model,
+                character_id=char_id,
+            )
+            processed.append(processed_char)
+            
+            logger.debug(f"  📝 Character: {char.name} → {char_id}")
+        
+        return processed
+
+    def _parse_scenes(
+        self,
+        instructions: List[StoryInstruction],
+        characters: List[StoryCharacter],
+    ) -> List[Scene]:
+        """
+        Parse instructions into scenes.
+        
+        A scene is a group of instructions between 'setting' instructions.
+        
+        Args:
+            instructions: Story instructions
+            characters: Processed characters
+            
+        Returns:
+            List of scenes
+        """
+        logger.debug("🎬 Parsing scenes from instructions...")
+        
+        scenes = []
+        current_scene = None
+        scene_number = 0
+        
+        for idx, instruction in enumerate(instructions):
+            if instruction.type == "setting":
+                # Save previous scene if exists
+                if current_scene:
+                    scenes.append(current_scene)
+                
+                # Start new scene
+                scene_number += 1
+                scene_id = f"scene-{scene_number}"
+                
+                current_scene = Scene(
+                    scene_id=scene_id,
+                    scene_number=scene_number,
+                    title=instruction.title or f"Scene {scene_number}",
+                    location=instruction.setting or "Unknown location",
+                    instructions=[],
+                    characters=[],
+                    dialogue_beats=[],
+                )
+                
+                logger.debug(f"  🎬 Scene {scene_number}: {current_scene.title}")
+            
+            elif instruction.type == "end":
+                # End of story
+                if current_scene:
+                    scenes.append(current_scene)
+                break
+            
+            else:
+                # Add instruction to current scene
+                if current_scene:
+                    current_scene.instructions.append(instruction)
+                    
+                    # Track characters in this scene
+                    if instruction.character and instruction.character not in current_scene.characters:
+                        # Find character_id from name
+                        for char in characters:
+                            if char.name == instruction.character:
+                                current_scene.characters.append(char.character_id)
+                                break
+                    
+                    # Track dialogue beats
+                    if instruction.type == "dialogue":
+                        beat_id = f"{current_scene.scene_id}-beat-{len(current_scene.dialogue_beats) + 1}"
+                        dialogue_beat = {
+                            "beat_id": beat_id,
+                            "character": instruction.character,
+                            "script_text": instruction.text,
+                            "topic": self._extract_topic(instruction.text or ""),
+                            "is_completed": False,
+                        }
+                        current_scene.dialogue_beats.append(dialogue_beat)
+        
+        # Add last scene if exists
+        if current_scene and current_scene not in scenes:
+            scenes.append(current_scene)
+        
+        logger.debug(f"✅ Parsed {len(scenes)} scenes")
+        return scenes
+
+    def _extract_topic(self, text: str) -> str:
+        """
+        Extract topic from dialogue text (simple keyword extraction).
+        
+        Args:
+            text: Dialogue text
+            
+        Returns:
+            Topic summary
+        """
+        # Simple topic extraction - take first 50 chars
+        # TODO: Could use NLP for better topic extraction
+        topic = text[:50]
+        if len(text) > 50:
+            topic += "..."
+        return topic
+
+    def _validate_scenes(self, scenes: List[Scene]) -> None:
+        """
+        Validate scene structure.
+        
+        Args:
+            scenes: Parsed scenes
+            
+        Raises:
+            ValueError: Invalid scene structure
+        """
+        if not scenes:
+            raise ValueError("Story must have at least one scene")
+        
+        for scene in scenes:
+            if not scene.title:
+                raise ValueError(f"Scene {scene.scene_number} missing title")
+            
+            if not scene.location:
+                raise ValueError(f"Scene {scene.scene_number} missing location")
+            
+            if not scene.instructions:
+                logger.warning(f"⚠️ Scene {scene.scene_number} has no instructions")
+        
+        logger.debug(f"✅ Scene validation passed ({len(scenes)} scenes)")
+

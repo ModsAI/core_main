@@ -162,6 +162,7 @@ cors_origins = [
     "http://localhost:8083",
     "http://localhost:3000",
     "http://localhost:4200",
+    "http://localhost:5173",  # Vite dev server
 ]
 
 # attach the env_cors_origins to the cors_origins if it exists

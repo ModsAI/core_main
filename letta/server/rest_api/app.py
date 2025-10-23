@@ -31,6 +31,9 @@ from letta.schemas.letta_message_content import (
 )
 from letta.server.constants import REST_DEFAULT_PORT
 from letta.server.db import db_registry
+from fastapi.middleware.cors import CORSMiddleware
+
+
 
 # NOTE(charles): these are extra routes that are not part of v1 but we still need to mount to pass tests
 from letta.server.rest_api.auth.index import setup_auth_router  # TODO: probably remove right?
@@ -184,14 +187,18 @@ def create_application() -> "FastAPI":
 
     debug_mode = "--debug" in sys.argv
     app = FastAPI(
-        swagger_ui_parameters={"docExpansion": "none"},
-        # openapi_tags=TAGS_METADATA,
-        title="Letta",
-        summary="Create LLM agents with long-term memory and custom tools 📚🦙",
-        version=letta_version,
-        debug=debug_mode,  # if True, the stack trace will be printed in the response
-        lifespan=lifespan,
-    )
+    swagger_ui_parameters={"docExpansion": "none"},
+    title="Letta",
+    summary="Create LLM agents with long-term memory and custom tools 📚🦙",
+    version=letta_version,
+    debug=debug_mode,
+    lifespan=lifespan,
+    docs_url="/docs",         # ✅ enable Swagger UI
+    redoc_url="/redoc",       # ✅ optional, ReDoc UI
+    openapi_url="/openapi.json"  # ✅ required for docs to work
+)
+
+
 
     # === Exception Handlers ===
     # TODO (cliandy): move to separate file
@@ -335,6 +342,8 @@ def create_application() -> "FastAPI":
 
     # NOTE: ethan these are the extra routes
     # TODO(ethan) remove
+    # REMOVED: Duplicate CORS middleware that was blocking app.letta.com
+    # The main CORS middleware (lines 289-295) already handles all origins including localhost:5173
 
     # admin/users
     app.include_router(users_router, prefix=ADMIN_PREFIX)

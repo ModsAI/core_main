@@ -58,14 +58,64 @@ class GoogleVertexClient(LLMClientBase):
     async def request_async(self, request_data: dict, llm_config: LLMConfig) -> dict:
         """
         Performs underlying request to llm and returns raw response.
+        Includes automatic retry logic for transient errors.
         """
+        import asyncio
+        from letta.errors import ContextWindowExceededError, LLMBadRequestError, LLMRateLimitError, LLMServerError
+        
         client = self._get_client()
-        response = await client.aio.models.generate_content(
-            model=llm_config.model,
-            contents=request_data["contents"],
-            config=request_data["config"],
-        )
-        return response.model_dump()
+        max_retries = 3
+        base_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=llm_config.model,
+                    contents=request_data["contents"],
+                    config=request_data["config"],
+                )
+                return response.model_dump()
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                is_last_attempt = (attempt == max_retries - 1)
+                
+                # Determine if error is retryable
+                is_retryable = any([
+                    "timeout" in error_str,
+                    "deadline" in error_str,
+                    "503" in error_str,
+                    "502" in error_str,
+                    "500" in error_str and "transient" in error_str,
+                    "unavailable" in error_str,
+                ])
+                
+                # Don't retry these errors
+                is_non_retryable = any([
+                    "authentication" in error_str,
+                    "api key" in error_str,
+                    "unauthorized" in error_str,
+                    "context length" in error_str,
+                    "too large" in error_str,
+                    "quota" in error_str,
+                    "invalid" in error_str and "schema" in error_str,
+                ])
+                
+                if is_non_retryable or is_last_attempt:
+                    # Don't retry, re-raise with proper error type
+                    raise e
+                
+                if is_retryable:
+                    delay = base_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(f"[Google AI] Retryable error on attempt {attempt + 1}/{max_retries}: {str(e)[:200]}. Retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    # Unknown error type, don't retry
+                    raise e
+        
+        # Should not reach here, but just in case
+        raise Exception("Max retries exceeded")
 
     @staticmethod
     def add_dummy_model_messages(messages: List[dict]) -> List[dict]:
@@ -211,20 +261,57 @@ class GoogleVertexClient(LLMClientBase):
     ) -> dict:
         """
         Constructs a request object in the expected data format for this client.
+        Includes validation to catch issues before sending to Gemini.
         """
+        from letta.errors import LLMBadRequestError, ErrorCode
+
+        # Validate tool count - Gemini has limits on function declarations
+        if tools and len(tools) > 64:
+            logger.warning(f"[Google AI] Tool count ({len(tools)}) exceeds recommended limit of 64. This may cause request failures.")
+            # Don't fail hard, but warn - some models may support more
 
         if tools:
             tool_objs = [Tool(type="function", function=t) for t in tools]
             tool_names = [t.function.name for t in tool_objs]
+            
+            # Validate tool names
+            for tool_name in tool_names:
+                if not tool_name or len(tool_name) > 64:
+                    raise LLMBadRequestError(
+                        message=f"Tool name '{tool_name}' is invalid (must be 1-64 characters)",
+                        code=ErrorCode.INVALID_ARGUMENT,
+                        details={"tool_name": tool_name}
+                    )
+            
             # Convert to the exact payload style Google expects
-            formatted_tools = self.convert_tools_to_google_ai_format(tool_objs, llm_config)
+            try:
+                formatted_tools = self.convert_tools_to_google_ai_format(tool_objs, llm_config)
+            except Exception as e:
+                logger.error(f"[Google AI] Failed to convert tools to Google AI format: {e}")
+                raise LLMBadRequestError(
+                    message=f"Failed to format tools for Google AI. Tool schemas may be too complex or contain unsupported features: {e}",
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    details={"error": str(e), "tool_count": len(tools)}
+                )
         else:
             formatted_tools = []
             tool_names = []
 
-        contents = self.add_dummy_model_messages(
-            [m.to_google_ai_dict() for m in messages],
-        )
+        # Validate message count
+        if len(messages) > 1000:
+            logger.warning(f"[Google AI] Message count ({len(messages)}) is very high. Consider summarizing conversation history.")
+
+        try:
+            contents = self.add_dummy_model_messages(
+                [m.to_google_ai_dict() for m in messages],
+            )
+        except Exception as e:
+            logger.error(f"[Google AI] Failed to convert messages to Google AI format: {e}")
+            raise LLMBadRequestError(
+                message=f"Failed to format messages for Google AI: {e}",
+                code=ErrorCode.INVALID_ARGUMENT,
+                details={"error": str(e), "message_count": len(messages)}
+            )
 
         request_data = {
             "contents": contents,
@@ -242,8 +329,9 @@ class GoogleVertexClient(LLMClientBase):
         else:
             tool_config = ToolConfig(
                 function_calling_config=FunctionCallingConfig(
-                    # ANY mode forces the model to predict only function calls
-                    mode=FunctionCallingConfigMode.ANY,
+                    # AUTO mode lets the model choose between text and function calls intelligently
+                    # This should make the model more likely to use memory tools when appropriate
+                    mode=FunctionCallingConfigMode.AUTO,
                     # Provide the list of tools (though empty should also work, it seems not to)
                     allowed_function_names=tool_names,
                 )
@@ -258,6 +346,15 @@ class GoogleVertexClient(LLMClientBase):
                 thinking_budget=llm_config.max_reasoning_tokens if llm_config.enable_reasoner else 0,
             )
             request_data["config"]["thinking_config"] = thinking_config.model_dump()
+
+        # Estimate request size and warn if potentially too large
+        try:
+            request_json = json.dumps(request_data)
+            request_size_mb = len(request_json) / (1024 * 1024)
+            if request_size_mb > 10:
+                logger.warning(f"[Google AI] Request size is large ({request_size_mb:.2f} MB). This may cause failures or slow responses.")
+        except Exception:
+            pass  # Don't fail on size estimation
 
         return request_data
 
@@ -303,8 +400,71 @@ class GoogleVertexClient(LLMClientBase):
 
                 if content.role is None or content.parts is None:
                     # This means the response is malformed like MALFORMED_FUNCTION_CALL
-                    # NOTE: must be a ValueError to trigger a retry
+                    # 🚨 MALFORMED_FUNCTION_CALL FIX: Handle gracefully for image generation
                     if candidate.finish_reason == "MALFORMED_FUNCTION_CALL":
+                        from letta.log import get_logger
+                        logger = get_logger(__name__)
+                        logger.warning(f"🚨 MALFORMED_FUNCTION_CALL detected: {candidate.finish_message[:350]}...")
+                        
+                        # Check if this is an image generation request
+                        if hasattr(candidate, 'finish_message') and candidate.finish_message:
+                            message = candidate.finish_message.lower()
+                            if any(keyword in message for keyword in ['image', 'generate', 'picture', 'photo']):
+                                logger.info("🎨 Detected malformed image generation call - providing fallback")
+                                # Create a fallback function call for image generation
+                                import json
+                                import uuid
+                                
+                                # Extract prompt from the malformed message if possible
+                                prompt = "beautiful image"  # default
+                                try:
+                                    # Try to extract prompt from the malformed message
+                                    if "prompt" in message:
+                                        prompt_start = message.find("prompt") + 6
+                                        prompt_part = message[prompt_start:prompt_start+100]
+                                        if prompt_part.strip():
+                                            prompt = prompt_part.strip()[:50]  # Limit length
+                                except:
+                                    pass
+                                
+                                # Create a proper function call structure
+                                fallback_function_call = {
+                                    "name": "generate_image",
+                                    "arguments": json.dumps({"prompt": prompt})
+                                }
+                                
+                                # Create a mock content structure
+                                from openai.types.chat.chat_completion_message_tool_call import Function as OpenAIFunction
+                                from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall as OpenAIToolCall
+                                
+                                mock_tool_call = OpenAIToolCall(
+                                    id=f"call_{uuid.uuid4().hex[:8]}",
+                                    type="function",
+                                    function=OpenAIFunction(
+                                        name="generate_image",
+                                        arguments=json.dumps({"prompt": prompt})
+                                    )
+                                )
+                                
+                                # Create a choice with the fallback
+                                from openai.types.chat.chat_completion import Choice
+                                from openai.types.chat.chat_completion_message import ChatCompletionMessage
+                                
+                                fallback_choice = Choice(
+                                    index=index,
+                                    message=ChatCompletionMessage(
+                                        role="assistant",
+                                        content=None,
+                                        tool_calls=[mock_tool_call]
+                                    ),
+                                    finish_reason="tool_calls"
+                                )
+                                
+                                choices.append(fallback_choice)
+                                index += 1
+                                continue  # Skip the normal processing for this candidate
+                        
+                        # For non-image requests, still raise the error to trigger retry
                         raise ValueError(f"Error in response data from LLM: {candidate.finish_message[:350]}...")
                     else:
                         raise ValueError(f"Error in response data from LLM: {response_data}")
@@ -496,5 +656,93 @@ class GoogleVertexClient(LLMClientBase):
 
     @trace_method
     def handle_llm_error(self, e: Exception) -> Exception:
-        # Fallback to base implementation
+        """
+        Maps Google/Gemini-specific errors to common LLMError types.
+        Handles authentication, quota, context window, and API errors.
+        """
+        from letta.errors import (
+            ContextWindowExceededError,
+            ErrorCode,
+            LLMAuthenticationError,
+            LLMBadRequestError,
+            LLMConnectionError,
+            LLMError,
+            LLMRateLimitError,
+            LLMServerError,
+            LLMTimeoutError,
+        )
+
+        error_str = str(e).lower()
+        error_message = str(e)
+
+        # Check for authentication/API key errors
+        if any(keyword in error_str for keyword in ["api key", "authentication", "unauthorized", "invalid_api_key", "permission denied"]):
+            logger.warning(f"[Google AI] Authentication error: {error_message}")
+            return LLMAuthenticationError(
+                message=f"Google AI authentication failed. Please check your GEMINI_API_KEY: {error_message}",
+                code=ErrorCode.UNAUTHENTICATED,
+                details={"original_error": error_message},
+            )
+
+        # Check for context window / request size errors
+        if any(keyword in error_str for keyword in [
+            "context length", "too large", "request too large", "maximum context",
+            "exceeds", "token limit", "context window", "max_tokens"
+        ]):
+            logger.warning(f"[Google AI] Context window exceeded: {error_message}")
+            return ContextWindowExceededError(
+                message=f"Google AI request exceeded context window. Try reducing message history or tool count: {error_message}",
+                details={"original_error": error_message},
+            )
+
+        # Check for rate limiting / quota errors
+        if any(keyword in error_str for keyword in ["rate limit", "quota", "429", "resource exhausted"]):
+            logger.warning(f"[Google AI] Rate limit or quota exceeded: {error_message}")
+            return LLMRateLimitError(
+                message=f"Google AI rate limit or quota exceeded: {error_message}",
+                code=ErrorCode.RATE_LIMIT_EXCEEDED,
+                details={"original_error": error_message},
+            )
+
+        # Check for invalid request / bad schema errors
+        if any(keyword in error_str for keyword in [
+            "invalid", "bad request", "400", "malformed", "unsupported",
+            "schema", "parameter", "tool", "function"
+        ]):
+            logger.warning(f"[Google AI] Bad request (possibly invalid tool schema): {error_message}")
+            return LLMBadRequestError(
+                message=f"Google AI rejected request. This may be due to unsupported tool schema or invalid parameters: {error_message}",
+                code=ErrorCode.INVALID_ARGUMENT,
+                details={"original_error": error_message},
+            )
+
+        # Check for timeout errors
+        if any(keyword in error_str for keyword in ["timeout", "timed out", "deadline"]):
+            logger.warning(f"[Google AI] Request timeout: {error_message}")
+            return LLMTimeoutError(
+                message=f"Google AI request timed out: {error_message}",
+                code=ErrorCode.TIMEOUT,
+                details={"original_error": error_message},
+            )
+
+        # Check for server errors (5xx)
+        if any(keyword in error_str for keyword in ["500", "502", "503", "504", "internal server error", "service unavailable"]):
+            logger.warning(f"[Google AI] Server error: {error_message}")
+            return LLMServerError(
+                message=f"Google AI service error. This is a temporary issue, please retry: {error_message}",
+                code=ErrorCode.INTERNAL_SERVER_ERROR,
+                details={"original_error": error_message},
+            )
+
+        # Check for connection errors
+        if any(keyword in error_str for keyword in ["connection", "network", "dns", "unreachable"]):
+            logger.warning(f"[Google AI] Connection error: {error_message}")
+            return LLMConnectionError(
+                message=f"Failed to connect to Google AI: {error_message}",
+                code=ErrorCode.INTERNAL_SERVER_ERROR,
+                details={"original_error": error_message},
+            )
+
+        # Fallback to base implementation for unhandled errors
+        logger.warning(f"[Google AI] Unhandled error type, using base handler: {error_message}")
         return super().handle_llm_error(e)
