@@ -30,12 +30,15 @@ fi
 
 # Attempt database migration
 echo "Attempting to migrate database..."
-if ! alembic upgrade head; then
+# Use the letta submodule's alembic migrations directly
+cd letta
+if ! alembic -c alembic.ini upgrade head; then
     echo "ERROR: Database migration failed!"
     echo "Please check your database connection and try again."
     echo "If the problem persists, check the logs for more details."
     exit 1
 fi
+cd ..
 echo "Database migration completed successfully."
 
 # Set permissions for tool execution directory if configured
