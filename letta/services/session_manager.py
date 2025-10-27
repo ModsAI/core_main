@@ -369,17 +369,15 @@ class SessionManager:
                 from letta.schemas.llm_config import LLMConfig
                 from letta.schemas.embedding_config import EmbeddingConfig
                 
-                # WORKAROUND: Use letta-free instead of Gemini due to Letta 0.8.9 streaming bugs
-                # Gemini causes "UnboundLocalError: Choice" in streaming_response.py
-                # TODO: Switch back to Gemini after upgrading to Letta 0.8.17+
-                default_model = os.getenv("DEFAULT_STORY_MODEL", "letta-free")
+                # ✅ FIXED: Upgraded to Letta 0.8.17 - Gemini streaming bugs resolved!
+                # Now using Gemini 2.5 Flash with full 1M token context window
+                default_model = os.getenv("DEFAULT_STORY_MODEL", "google_ai/gemini-2.5-flash-preview-09-2025")
                 
-                # Build LLM config for letta-free (hosted OpenAI-compatible)
+                # Build LLM config for Gemini 2.5 Flash
                 llm_config = LLMConfig(
-                    model="letta-free",
-                    model_endpoint_type="openai",
-                    model_endpoint="https://inference.letta.com",
-                    context_window=30000,  # letta-free context window
+                    model="google_ai/gemini-2.5-flash-preview-09-2025",
+                    model_endpoint_type="google_ai",
+                    context_window=1000000,  # 1M token context window!
                 )
                 
                 # Build embedding config (use Letta's free embedding service)
