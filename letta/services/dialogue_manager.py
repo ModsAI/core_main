@@ -43,8 +43,8 @@ class DialogueManager:
     7. Handle errors with fallback
     """
 
-    def __init__(self):
-        self.db = db_registry.get_db()
+    def __init__(self, server=None):
+        self.server = server  # Will be injected from router
         self.agent_manager = AgentManager()
         self.session_manager = SessionManager()
         self.story_manager = StoryManager()
@@ -215,7 +215,7 @@ class DialogueManager:
             # Send message to agent
             message_create = MessageCreate(
                 role=MessageRole.user,
-                text=f"{context_message}\n\nPlayer: {player_message}",
+                content=f"{context_message}\n\nPlayer: {player_message}",  # Fixed: was 'text', should be 'content'
             )
             
             # Try to send message (with retry on failure - Q10: Option C)
@@ -226,15 +226,36 @@ class DialogueManager:
                 try:
                     logger.debug(f"  🔄 Attempt {attempt + 1}/{max_retries}")
                     
-                    # Send message to agent
-                    messages = await self.agent_manager.send_message_to_agent(
-                        agent_id=agent_id,
-                        message=message_create,
+                    # Use send_messages with StreamingServerInterface (correct for Letta 0.8.9)
+                    from letta.server.rest_api.interface import StreamingServerInterface
+                    
+                    # Create interface to capture messages
+                    interface = StreamingServerInterface()
+                    
+                    # Call send_messages (synchronous, even in async context)
+                    usage_stats = self.server.send_messages(
                         actor=actor,
+                        agent_id=agent_id,
+                        input_messages=[message_create],
+                        interface=interface,
                     )
                     
-                    # Extract character response
-                    character_response = self._extract_character_dialogue(messages)
+                    # Get recent messages from the agent's message history
+                    # Use message_manager directly (correct for Letta 0.8.9)
+                    from letta.services.message_manager import MessageManager
+                    
+                    message_manager = MessageManager()
+                    recent_messages = await message_manager.list_messages_for_agent_async(
+                        agent_id=agent_id,
+                        actor=actor,
+                        limit=5,  # Get last 5 messages (should include our response)
+                        ascending=False,  # Get newest first
+                    )
+                    
+                    logger.debug(f"  📦 Received {len(recent_messages)} messages from message history")
+                    
+                    # Extract character response from recent messages
+                    character_response = self._extract_character_dialogue(recent_messages)
                     
                     if character_response:
                         # Parse emotion and animation from response
@@ -252,6 +273,8 @@ class DialogueManager:
                 except Exception as e:
                     last_error = str(e)
                     logger.warning(f"  ⚠️ Agent error: {e}, retrying...")
+                    import traceback
+                    logger.debug(f"  📜 Full traceback: {traceback.format_exc()}")
                     continue
             
             # All retries failed - use fallback (Q10: scripted text)
@@ -339,31 +362,44 @@ class DialogueManager:
         return "\n".join(prompt_parts)
 
     def _extract_character_dialogue(self, messages: List[LettaMessage]) -> str:
-        """Extract character dialogue from agent messages"""
-        # Look for function calls with 'send_message' or text content
-        for message in messages:
-            # Check function calls
-            if hasattr(message, 'function_call') and message.function_call:
-                if message.function_call.name == 'send_message':
-                    import json
-                    try:
-                        args = json.loads(message.function_call.arguments)
-                        if 'message' in args:
-                            return args['message']
-                    except:
-                        pass
-            
-            # Check message content
-            if hasattr(message, 'message') and message.message:
-                # Skip inner thoughts
-                if not message.message.startswith('[') or not ']' in message.message:
-                    return message.message
-            
-            # Check text field
-            if hasattr(message, 'text') and message.text:
-                if not message.text.startswith('[') or not ']' in message.text:
-                    return message.text
+        """Extract character dialogue from agent messages (from database)"""
+        logger.debug(f"  📦 Extracting dialogue from {len(messages)} messages")
         
+        # Look for assistant messages with tool_calls
+        for i, message in enumerate(messages):
+            logger.debug(f"  📨 Message {i}: role={getattr(message, 'role', 'unknown')}")
+            
+            # Only look at assistant messages
+            if message.role != 'assistant':
+                continue
+            
+            # Check for tool_calls (new Letta format)
+            if hasattr(message, 'tool_calls') and message.tool_calls:
+                logger.debug(f"    🔧 Found {len(message.tool_calls)} tool calls")
+                for tool_call in message.tool_calls:
+                    if tool_call.function.name == 'send_message':
+                        import json
+                        try:
+                            args = json.loads(tool_call.function.arguments)
+                            logger.debug(f"    📝 send_message arguments: {args}")
+                            if 'message' in args:
+                                dialogue = args['message']
+                                logger.debug(f"    ✅ Extracted dialogue: {dialogue[:100]}...")
+                                return dialogue
+                        except Exception as e:
+                            logger.debug(f"    ❌ Failed to parse tool call arguments: {e}")
+            
+            # Check for content (TextContent)
+            if hasattr(message, 'content') and message.content:
+                for content_item in message.content:
+                    if hasattr(content_item, 'text') and content_item.text:
+                        text = content_item.text
+                        logger.debug(f"    💬 Found text content: {text[:100]}...")
+                        # Skip inner thoughts
+                        if not text.startswith('[') or not ']' in text:
+                            return text
+        
+        logger.warning("  ⚠️ No dialogue extracted from messages!")
         return ""
 
     def _parse_emotion_and_animation(self, text: str) -> Tuple[str, str]:
@@ -503,20 +539,20 @@ class DialogueManager:
     ) -> None:
         """Update session state in database"""
         try:
-            async with self.db.get_async_session() as session:
-                from sqlalchemy import update
-                from letta.orm.story import StorySession as StorySessionORM
-                
-                stmt = (
-                    update(StorySessionORM)
-                    .where(StorySessionORM.session_id == session_id)
-                    .values(state=state.dict())
-                )
-                
-                await session.execute(stmt)
-                await session.commit()
-                
-                logger.debug(f"  💾 Session state updated: {session_id}")
+            async with db_registry.async_session() as session:
+                async with session.begin():
+                    from sqlalchemy import update
+                    from letta.orm.story import StorySession as StorySessionORM
+                    
+                    stmt = (
+                        update(StorySessionORM)
+                        .where(StorySessionORM.session_id == session_id)
+                        .values(state=state.dict())
+                    )
+                    
+                    await session.execute(stmt)
+                    
+                    logger.debug(f"  💾 Session state updated: {session_id}")
         
         except Exception as e:
             logger.error(f"  ❌ Failed to update session state: {e}")

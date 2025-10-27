@@ -35,8 +35,8 @@ class Story(SqlalchemyBase):
     story_json: Mapped[dict] = mapped_column(JSON, nullable=False)  # Original story structure
     scenes_json: Mapped[dict] = mapped_column(JSON, nullable=False)  # Processed scenes
 
-    # Metadata
-    metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # Metadata (using column name 'metadata_' to avoid SQLAlchemy reserved name)
+    story_metadata: Mapped[Optional[dict]] = mapped_column("metadata_", JSON, nullable=True)
 
     # Multi-tenancy
     organization_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
@@ -81,8 +81,8 @@ class StorySession(SqlalchemyBase):
     # Character-to-agent mappings
     character_agents: Mapped[dict] = mapped_column(JSON, nullable=False)  # character_name -> agent_id
 
-    # Metadata
-    metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # Metadata (using column name 'metadata_' to avoid SQLAlchemy reserved name)
+    session_metadata: Mapped[Optional[dict]] = mapped_column("metadata_", JSON, nullable=True)
 
     # Multi-tenancy
     organization_id: Mapped[str] = mapped_column(String, nullable=False, index=True)

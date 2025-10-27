@@ -28,10 +28,13 @@ def upgrade() -> None:
         sa.Column('description', sa.Text, nullable=True),
         sa.Column('story_json', sa.JSON, nullable=False),  # Complete story structure
         sa.Column('scenes_json', sa.JSON, nullable=False),  # Processed scenes
-        sa.Column('metadata', sa.JSON, nullable=True),
+        sa.Column('metadata_', sa.JSON, nullable=True),  # Renamed to avoid SQLAlchemy reserved name
         sa.Column('organization_id', sa.String, nullable=False, index=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), server_onupdate=sa.func.now()),
+        sa.Column('is_deleted', sa.Boolean, server_default=sa.text('FALSE')),
+        sa.Column('_created_by_id', sa.String, nullable=True),
+        sa.Column('_last_updated_by_id', sa.String, nullable=True),
     )
     
     # Create story_sessions table
@@ -44,10 +47,13 @@ def upgrade() -> None:
         sa.Column('status', sa.String, nullable=False, default='active'),  # active, paused, completed, archived
         sa.Column('state', sa.JSON, nullable=False),  # SessionState as JSON
         sa.Column('character_agents', sa.JSON, nullable=False),  # character_name -> agent_id mapping
-        sa.Column('metadata', sa.JSON, nullable=True),
+        sa.Column('metadata_', sa.JSON, nullable=True),  # Renamed to avoid SQLAlchemy reserved name
         sa.Column('organization_id', sa.String, nullable=False, index=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), server_onupdate=sa.func.now()),
+        sa.Column('is_deleted', sa.Boolean, server_default=sa.text('FALSE')),
+        sa.Column('_created_by_id', sa.String, nullable=True),
+        sa.Column('_last_updated_by_id', sa.String, nullable=True),
         sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
         
         # Foreign key to stories

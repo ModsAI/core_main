@@ -25,6 +25,7 @@ from letta.schemas.story import (
     SessionState,
     SessionStatus,
     Story,
+    StoryCharacter,
     StorySession,
 )
 from letta.schemas.user import User
@@ -48,7 +49,6 @@ class SessionManager:
     """
 
     def __init__(self):
-        self.db = db_registry.get_db()
         self.story_manager = StoryManager()
         self.agent_manager = AgentManager()
         logger.info("🎮 SessionManager initialized")
@@ -114,36 +114,45 @@ class SessionManager:
             
             # Step 4: Initialize session state
             session_id = f"session-{uuid.uuid4()}"
+            
+            # Build character relationships (only for characters with character_id)
+            character_relationships = {
+                char.character_id: 0.0
+                for char in story.characters
+                if char.character_id is not None
+            }
+            
             initial_state = SessionState(
                 current_scene_number=1,  # Start at scene 1
                 current_instruction_index=0,  # Start at first instruction
                 completed_dialogue_beats=[],
-                character_relationships={char.character_id: 0.0 for char in story.characters},
+                character_relationships=character_relationships,
                 player_choices=[],
                 variables={},
             )
             
             # Step 5: Store in database
-            async with self.db.get_async_session() as session:
-                session_orm = StorySessionORM(
-                    id=f"session-{uuid.uuid4()}",
-                    session_id=session_id,
-                    user_id=actor.id,
-                    story_id=session_create.story_id,
-                    status=SessionStatus.ACTIVE.value,
-                    state=initial_state.dict(),
-                    character_agents=character_agents,
-                    metadata={
-                        "story_title": story.title,
-                        "total_scenes": len(story.scenes),
-                        "started_at": datetime.utcnow().isoformat(),
-                    },
-                    organization_id=actor.organization_id,
-                )
-                
-                session.add(session_orm)
-                await session.commit()
-                await session.refresh(session_orm)
+            async with db_registry.async_session() as session:
+                async with session.begin():
+                    session_orm = StorySessionORM(
+                        id=f"session-{uuid.uuid4()}",
+                        session_id=session_id,
+                        user_id=actor.id,
+                        story_id=session_create.story_id,
+                        status=SessionStatus.ACTIVE.value,
+                        state=initial_state.dict(),
+                        character_agents=character_agents,
+                        session_metadata={
+                            "story_title": story.title,
+                            "total_scenes": len(story.scenes),
+                            "started_at": datetime.utcnow().isoformat(),
+                        },
+                        organization_id=actor.organization_id,
+                    )
+                    
+                    session.add(session_orm)
+                    await session.flush()
+                    await session.refresh(session_orm)
                 
                 logger.info(f"✅ Session created: {session_id}")
                 
@@ -156,17 +165,25 @@ class SessionManager:
                     None,
                 )
                 
+                # Get list of all character IDs for dialogue (normalized names)
+                available_characters = [char.character_id for char in story.characters if char.character_id]
+                
+                logger.info(f"✅ Available characters: {', '.join(available_characters)}")
+                
                 return SessionStartResponse(
                     success=True,
                     session_id=session_id,
                     story_title=story.title,
                     first_scene=first_scene,
+                    current_scene=first_scene,  # Alias for compatibility
                     player_character=player_character,
+                    available_characters=available_characters,
                     instructions=[
                         f"Session started for '{story.title}'",
                         f"Session ID: {session_id}",
                         f"Starting scene: {first_scene.title}",
                         f"Location: {first_scene.location}",
+                        f"Characters: {', '.join(available_characters)}",
                         f"Send dialogue with: POST /api/v1/story/sessions/{session_id}/dialogue",
                     ],
                 )
@@ -346,12 +363,42 @@ class SessionManager:
                 human_context = self._build_story_context(story)
                 
                 # Create agent
+                # Use Gemini 2.5 Flash (latest non-deprecated model) for fast, quality dialogue generation
+                # Can be overridden via environment variable DEFAULT_STORY_MODEL
+                import os
+                from letta.schemas.llm_config import LLMConfig
+                from letta.schemas.embedding_config import EmbeddingConfig
+                
+                # WORKAROUND: Use letta-free instead of Gemini due to Letta 0.8.9 streaming bugs
+                # Gemini causes "UnboundLocalError: Choice" in streaming_response.py
+                # TODO: Switch back to Gemini after upgrading to Letta 0.8.17+
+                default_model = os.getenv("DEFAULT_STORY_MODEL", "letta-free")
+                
+                # Build LLM config for letta-free (hosted OpenAI-compatible)
+                llm_config = LLMConfig(
+                    model="letta-free",
+                    model_endpoint_type="openai",
+                    model_endpoint="https://inference.letta.com",
+                    context_window=30000,  # letta-free context window
+                )
+                
+                # Build embedding config (use Letta's free embedding service)
+                embedding_config = EmbeddingConfig(
+                    embedding_endpoint_type="hugging-face",
+                    embedding_endpoint="https://embeddings.memgpt.ai",
+                    embedding_model="letta-free",
+                    embedding_dim=1024,
+                    embedding_chunk_size=300,
+                )
+                
                 create_agent = CreateAgent(
                     name=f"Story-{character.name}-{character.character_id}",
                     description=f"Character from story '{story.title}': {character.name}",
                     persona=persona,
                     human=human_context,
                     agent_type=AgentType.memgpt_agent,
+                    llm_config=llm_config,
+                    embedding_config=embedding_config,
                     metadata={
                         "story_id": story.story_id,
                         "character_id": character.character_id,
@@ -361,7 +408,7 @@ class SessionManager:
                     },
                 )
                 
-                agent = await self.agent_manager.create_agent(create_agent, actor=actor)
+                agent = await self.agent_manager.create_agent_async(create_agent, actor=actor)
                 character_agents[character.character_id] = agent.id
                 
                 logger.debug(f"    ✅ Created agent {agent.id} for {character.name}")
@@ -439,21 +486,22 @@ class SessionManager:
     ) -> Optional[StorySession]:
         """Get active session for user + story"""
         try:
-            async with self.db.get_async_session() as session:
-                query = select(StorySessionORM).where(
-                    and_(
-                        StorySessionORM.user_id == user_id,
-                        StorySessionORM.story_id == story_id,
-                        StorySessionORM.status == SessionStatus.ACTIVE.value,
-                        StorySessionORM.organization_id == actor.organization_id,
+            async with db_registry.async_session() as session:
+                async with session.begin():
+                    query = select(StorySessionORM).where(
+                        and_(
+                            StorySessionORM.user_id == user_id,
+                            StorySessionORM.story_id == story_id,
+                            StorySessionORM.status == SessionStatus.ACTIVE.value,
+                            StorySessionORM.organization_id == actor.organization_id,
+                        )
                     )
-                )
-                result = await session.execute(query)
-                session_orm = result.scalar_one_or_none()
-                
-                if session_orm:
-                    return self._convert_to_schema(session_orm)
-                return None
+                    result = await session.execute(query)
+                    session_orm = result.scalar_one_or_none()
+                    
+                    if session_orm:
+                        return self._convert_to_schema(session_orm)
+                    return None
         
         except Exception as e:
             logger.error(f"❌ Error checking active session: {e}")
@@ -466,19 +514,20 @@ class SessionManager:
     ) -> Optional[StorySession]:
         """Get session by ID"""
         try:
-            async with self.db.get_async_session() as session:
-                query = select(StorySessionORM).where(
-                    and_(
-                        StorySessionORM.session_id == session_id,
-                        StorySessionORM.organization_id == actor.organization_id,
+            async with db_registry.async_session() as session:
+                async with session.begin():
+                    query = select(StorySessionORM).where(
+                        and_(
+                            StorySessionORM.session_id == session_id,
+                            StorySessionORM.organization_id == actor.organization_id,
+                        )
                     )
-                )
-                result = await session.execute(query)
-                session_orm = result.scalar_one_or_none()
-                
-                if session_orm:
-                    return self._convert_to_schema(session_orm)
-                return None
+                    result = await session.execute(query)
+                    session_orm = result.scalar_one_or_none()
+                    
+                    if session_orm:
+                        return self._convert_to_schema(session_orm)
+                    return None
         
         except Exception as e:
             logger.error(f"❌ Error getting session {session_id}: {e}")

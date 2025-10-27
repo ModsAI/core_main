@@ -327,13 +327,14 @@ class GoogleVertexClient(LLMClientBase):
             request_data["config"]["response_schema"] = self.get_function_call_response_schema(tools[0])
             del request_data["config"]["tools"]
         else:
+            # Note: allowed_function_names can ONLY be set when mode is ANY, not AUTO
+            # Gemini API rejects requests with allowed_function_names when mode is AUTO
             tool_config = ToolConfig(
                 function_calling_config=FunctionCallingConfig(
                     # AUTO mode lets the model choose between text and function calls intelligently
                     # This should make the model more likely to use memory tools when appropriate
                     mode=FunctionCallingConfigMode.AUTO,
-                    # Provide the list of tools (though empty should also work, it seems not to)
-                    allowed_function_names=tool_names,
+                    # Don't set allowed_function_names with AUTO mode - API will reject it
                 )
             )
             request_data["config"]["tool_config"] = tool_config.model_dump()

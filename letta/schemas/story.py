@@ -220,7 +220,9 @@ class SessionStartResponse(BaseModel):
     session_id: str = Field(..., description="Session identifier")
     story_title: str = Field(..., description="Story title")
     first_scene: Scene = Field(..., description="First scene")
+    current_scene: Scene = Field(..., description="Current scene (alias for first_scene)")
     player_character: Optional[str] = Field(None, description="Player character name")
+    available_characters: List[str] = Field(..., description="List of character names available for dialogue")
     instructions: List[str] = Field(..., description="How to proceed")
 
 

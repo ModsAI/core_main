@@ -9,7 +9,7 @@ Provides endpoints for:
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from letta.log import get_logger
 from letta.schemas.story import (
@@ -17,12 +17,14 @@ from letta.schemas.story import (
     SessionResume,
     SessionRestartResponse,
     SessionStartResponse,
+    StoryDialogueRequest,
+    StoryDialogueResponse,
     StoryError,
     StoryUpload,
     StoryUploadResponse,
 )
-from letta.schemas.user import User
-from letta.server.rest_api.dependencies import get_current_user
+from letta.server.rest_api.utils import get_letta_server
+from letta.server.server import SyncServer  # Import for type hints (use string annotation in function signatures)
 from letta.services.session_manager import SessionManager
 from letta.services.story_manager import StoryManager
 
@@ -39,7 +41,8 @@ router = APIRouter(prefix="/story", tags=["story"])
 @router.post("/upload", response_model=StoryUploadResponse)
 async def upload_story(
     story: StoryUpload,
-    user: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Upload a new story.
@@ -101,11 +104,12 @@ async def upload_story(
     - 409: Story ID already exists
     - 500: Database error
     """
-    logger.info(f"📤 Story upload request: {story.title} (user: {user.id})")
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"📤 Story upload request: {story.title} (user: {actor.id})")
     
     try:
         story_manager = StoryManager()
-        response = await story_manager.upload_story(story, user)
+        response = await story_manager.upload_story(story, actor)
         
         logger.info(f"✅ Story uploaded: {response.story_id}")
         return response
@@ -169,7 +173,8 @@ async def upload_story(
 @router.post("/sessions/start", response_model=SessionStartResponse)
 async def start_session(
     session_create: SessionCreate,
-    user: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Start a new story session.
@@ -203,11 +208,12 @@ async def start_session(
     - 404: Story not found
     - 500: Agent creation or database error
     """
-    logger.info(f"🎬 Session start request: {session_create.story_id} (user: {user.id})")
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"🎬 Session start request: {session_create.story_id} (user: {actor.id})")
     
     try:
         session_manager = SessionManager()
-        response = await session_manager.start_session(session_create, user)
+        response = await session_manager.start_session(session_create, actor)
         
         logger.info(f"✅ Session started: {response.session_id}")
         return response
@@ -249,7 +255,8 @@ async def start_session(
 @router.get("/sessions/{session_id}/resume", response_model=SessionResume)
 async def resume_session(
     session_id: str,
-    user: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Resume an existing session.
@@ -271,11 +278,12 @@ async def resume_session(
     - 404: Session not found
     - 500: Database error
     """
-    logger.info(f"▶️ Session resume request: {session_id} (user: {user.id})")
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"▶️ Session resume request: {session_id} (user: {actor.id})")
     
     try:
         session_manager = SessionManager()
-        response = await session_manager.resume_session(session_id, user)
+        response = await session_manager.resume_session(session_id, actor)
         
         logger.info(f"✅ Session resumed: {session_id}")
         return response
@@ -314,7 +322,8 @@ async def resume_session(
 @router.post("/sessions/{session_id}/restart", response_model=SessionRestartResponse)
 async def restart_session(
     session_id: str,
-    user: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Restart a session from the beginning.
@@ -338,11 +347,12 @@ async def restart_session(
     - 404: Session not found
     - 500: Deletion or creation error
     """
-    logger.info(f"🔄 Session restart request: {session_id} (user: {user.id})")
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"🔄 Session restart request: {session_id} (user: {actor.id})")
     
     try:
         session_manager = SessionManager()
-        response = await session_manager.restart_session(session_id, user)
+        response = await session_manager.restart_session(session_id, actor)
         
         logger.info(f"✅ Session restarted: {response.session_id}")
         return response
@@ -380,7 +390,8 @@ async def restart_session(
 @router.delete("/sessions/{session_id}")
 async def delete_session(
     session_id: str,
-    user: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Delete a session permanently.
@@ -402,11 +413,12 @@ async def delete_session(
     - 404: Session not found
     - 500: Deletion error
     """
-    logger.info(f"🗑️ Session delete request: {session_id} (user: {user.id})")
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"🗑️ Session delete request: {session_id} (user: {actor.id})")
     
     try:
         session_manager = SessionManager()
-        deleted = await session_manager.delete_session(session_id, user)
+        deleted = await session_manager.delete_session(session_id, actor)
         
         if not deleted:
             raise HTTPException(
@@ -448,7 +460,8 @@ async def delete_session(
 async def generate_dialogue(
     session_id: str,
     request: StoryDialogueRequest,
-    user: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Generate character dialogue with script guidance.
@@ -505,13 +518,14 @@ async def generate_dialogue(
     - 404: Character not found
     - 500: Dialogue generation error
     """
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
     logger.info(f"💬 Dialogue request: session={session_id}, character={request.target_character}")
     
     try:
         from letta.services.dialogue_manager import DialogueManager
         
-        dialogue_manager = DialogueManager()
-        response = await dialogue_manager.generate_dialogue(session_id, request, user)
+        dialogue_manager = DialogueManager(server=server)
+        response = await dialogue_manager.generate_dialogue(session_id, request, actor)
         
         logger.info(f"✅ Dialogue generated: {len(response.dialogue_text)} chars")
         return response

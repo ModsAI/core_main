@@ -7,7 +7,7 @@ Follows the same patterns as existing Letta API routers.
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query  # Header for actor_id auth
 from fastapi.responses import JSONResponse
 
 from letta.log import get_logger
@@ -24,8 +24,7 @@ from letta.schemas.unity_character import (
     UnityDialogueRequest,
     UnityDialogueResponse,
 )
-from letta.schemas.user import User
-from letta.server.rest_api.dependencies import get_letta_server, get_current_user
+from letta.server.rest_api.utils import get_letta_server
 from letta.server.server import SyncServer
 from letta.services.unity_character_manager import UnityCharacterManager
 
@@ -42,8 +41,8 @@ router = APIRouter(prefix="/unity", tags=["unity"])
 @trace_method
 async def register_unity_character(
     request: UnityCharacterCreate = Body(...),
-    server: SyncServer = Depends(get_letta_server),
-    actor: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Register a new Unity character and create its associated Letta agent.
@@ -147,8 +146,8 @@ async def list_unity_characters(
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     limit: int = Query(50, description="Maximum number of results", ge=1, le=100),
     offset: int = Query(0, description="Pagination offset", ge=0),
-    server: SyncServer = Depends(get_letta_server),
-    actor: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     List Unity characters with optional filters.
@@ -205,8 +204,8 @@ async def list_unity_characters(
 @trace_method
 async def get_unity_character(
     unity_character_id: str,
-    server: SyncServer = Depends(get_letta_server),
-    actor: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Get a specific Unity character by ID.
@@ -264,8 +263,8 @@ async def get_unity_character(
 async def update_unity_character(
     unity_character_id: str,
     request: UnityCharacterUpdate = Body(...),
-    server: SyncServer = Depends(get_letta_server),
-    actor: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Update an existing Unity character.
@@ -335,8 +334,8 @@ async def update_unity_character(
 async def delete_unity_character(
     unity_character_id: str,
     cleanup_agent: bool = Query(True, description="Whether to delete the associated Letta agent"),
-    server: SyncServer = Depends(get_letta_server),
-    actor: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Delete a Unity character and optionally its associated Letta agent.
@@ -402,8 +401,8 @@ async def delete_unity_character(
 async def get_character_dialogue(
     unity_character_id: str,
     request: UnityDialogueRequest = Body(...),
-    server: SyncServer = Depends(get_letta_server),
-    actor: User = Depends(get_current_user),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Get AI-powered dialogue response from a Unity character.

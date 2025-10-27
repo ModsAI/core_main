@@ -42,7 +42,6 @@ class StoryManager:
     """
 
     def __init__(self):
-        self.db = db_registry.get_db()
         logger.info("📚 StoryManager initialized")
 
     async def upload_story(
@@ -90,40 +89,45 @@ class StoryManager:
             self._validate_scenes(scenes)
             
             # Step 5: Store in database
-            async with self.db.get_async_session() as session:
-                # Check if story already exists
-                existing_check = select(StoryORM).where(StoryORM.story_id == story_id)
-                result = await session.execute(existing_check)
-                existing_story = result.scalar_one_or_none()
-                
-                if existing_story:
-                    logger.error(f"❌ Story ID '{story_id}' already exists")
-                    raise IntegrityError(
-                        f"Story ID '{story_id}' already exists",
-                        None,
-                        None
+            async with db_registry.async_session() as session:
+                async with session.begin():
+                    # Check if story already exists
+                    existing_check = select(StoryORM).where(StoryORM.story_id == story_id)
+                    result = await session.execute(existing_check)
+                    existing_story = result.scalar_one_or_none()
+                    
+                    if existing_story:
+                        logger.error(f"❌ Story ID '{story_id}' already exists")
+                        raise IntegrityError(
+                            f"Story ID '{story_id}' already exists",
+                            None,
+                            None
+                        )
+                    
+                    # Create ORM object
+                    # Store processed story JSON with character_id populated
+                    processed_story_json = story_upload.dict()
+                    processed_story_json["characters"] = [char.dict() for char in characters]
+                    
+                    story_orm = StoryORM(
+                        id=f"story-{uuid.uuid4()}",
+                        story_id=story_id,
+                        title=story_upload.title,
+                        description=story_upload.description,
+                        story_json=processed_story_json,  # Processed JSON with character_id
+                        scenes_json={"scenes": [scene.dict() for scene in scenes]},  # Processed scenes
+                        story_metadata={
+                            "character_count": len(characters),
+                            "scene_count": len(scenes),
+                            "instruction_count": len(story_upload.instructions),
+                            "tags": story_upload.tags or [],
+                        },
+                        organization_id=actor.organization_id,
                     )
-                
-                # Create ORM object
-                story_orm = StoryORM(
-                    id=f"story-{uuid.uuid4()}",
-                    story_id=story_id,
-                    title=story_upload.title,
-                    description=story_upload.description,
-                    story_json=story_upload.dict(),  # Original JSON
-                    scenes_json={"scenes": [scene.dict() for scene in scenes]},  # Processed scenes
-                    metadata={
-                        "character_count": len(characters),
-                        "scene_count": len(scenes),
-                        "instruction_count": len(story_upload.instructions),
-                        "tags": story_upload.tags or [],
-                    },
-                    organization_id=actor.organization_id,
-                )
-                
-                session.add(story_orm)
-                await session.commit()
-                await session.refresh(story_orm)
+                    
+                    session.add(story_orm)
+                    await session.flush()
+                    await session.refresh(story_orm)
                 
                 logger.info(f"✅ Successfully uploaded story: {story_upload.title}")
                 
@@ -176,33 +180,34 @@ class StoryManager:
         logger.debug(f"🔍 Getting story: {story_id}")
         
         try:
-            async with self.db.get_async_session() as session:
-                query = select(StoryORM).where(
-                    StoryORM.story_id == story_id,
-                    StoryORM.organization_id == actor.organization_id,
-                )
-                result = await session.execute(query)
-                story_orm = result.scalar_one_or_none()
-                
-                if not story_orm:
-                    logger.warning(f"❌ Story not found: {story_id}")
-                    return None
-                
-                # Convert to schema
-                scenes = [Scene(**scene) for scene in story_orm.scenes_json["scenes"]]
-                characters = [StoryCharacter(**char) for char in story_orm.story_json["characters"]]
-                
-                story = Story(
-                    story_id=story_orm.story_id,
-                    title=story_orm.title,
-                    description=story_orm.description,
-                    characters=characters,
-                    scenes=scenes,
-                    metadata=story_orm.metadata or {},
-                )
-                
-                logger.debug(f"✅ Found story: {story.title}")
-                return story
+            async with db_registry.async_session() as session:
+                async with session.begin():
+                    query = select(StoryORM).where(
+                        StoryORM.story_id == story_id,
+                        StoryORM.organization_id == actor.organization_id,
+                    )
+                    result = await session.execute(query)
+                    story_orm = result.scalar_one_or_none()
+                    
+                    if not story_orm:
+                        logger.warning(f"❌ Story not found: {story_id}")
+                        return None
+                    
+                    # Convert to schema
+                    scenes = [Scene(**scene) for scene in story_orm.scenes_json["scenes"]]
+                    characters = [StoryCharacter(**char) for char in story_orm.story_json["characters"]]
+                    
+                    story = Story(
+                        story_id=story_orm.story_id,
+                        title=story_orm.title,
+                        description=story_orm.description,
+                        characters=characters,
+                        scenes=scenes,
+                        metadata=story_orm.story_metadata or {},
+                    )
+                    
+                    logger.debug(f"✅ Found story: {story.title}")
+                    return story
         
         except Exception as e:
             logger.error(f"❌ Failed to get story {story_id}: {e}", exc_info=True)
