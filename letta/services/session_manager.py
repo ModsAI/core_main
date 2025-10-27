@@ -370,12 +370,12 @@ class SessionManager:
                 from letta.schemas.embedding_config import EmbeddingConfig
                 
                 # ✅ FIXED: Upgraded to Letta 0.8.17 - Gemini streaming bugs resolved!
-                # Using Gemini 2.0 Flash Exp (confirmed working model)
-                default_model = os.getenv("DEFAULT_STORY_MODEL", "google_ai/gemini-2.0-flash-exp")
+                # Using Gemini 2.0 Flash (no provider prefix - Google API expects just model name)
+                default_model = os.getenv("DEFAULT_STORY_MODEL", "gemini-2.0-flash-001")
                 
                 # Build LLM config for Gemini 2.0 Flash
                 llm_config = LLMConfig(
-                    model="google_ai/gemini-2.0-flash-exp",
+                    model="gemini-2.0-flash-001",  # Google API expects model name without provider prefix
                     model_endpoint_type="google_ai",
                     context_window=1000000,  # 1M token context window!
                 )
