@@ -138,6 +138,9 @@ class StorySession(BaseModel):
 
 class SessionResume(BaseModel):
     """Response when resuming a session"""
+    success: bool = Field(default=True, description="Resume success")
+    session_id: str = Field(..., description="Session identifier")
+    story_title: str = Field(..., description="Story title")
     session: StorySession = Field(..., description="Session details")
     current_scene: Scene = Field(..., description="Current scene")
     recent_history: List[Dict[str, Any]] = Field(..., description="Recent interactions")

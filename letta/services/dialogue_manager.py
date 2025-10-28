@@ -90,6 +90,21 @@ class DialogueManager:
             if not story:
                 raise ValueError(f"Story '{session.story_id}' not found")
             
+            # 🎮 FIRST-PERSON MODE: Validate player isn't talking to themselves
+            # Find main character
+            main_character = next(
+                (char for char in story.characters if char.is_main_character),
+                None
+            )
+            
+            # Block if player tries to talk to main character
+            if main_character and request.target_character == main_character.character_id:
+                raise ValueError(
+                    f"❌ Cannot talk to '{main_character.name}' - YOU ARE {main_character.name}! "
+                    f"You're playing as the main character. Talk to OTHER characters instead. "
+                    f"Available: {list(session.character_agents.keys())}"
+                )
+            
             # Step 2: Get current scene
             current_scene_num = session.state.current_scene_number
             if current_scene_num > len(story.scenes):

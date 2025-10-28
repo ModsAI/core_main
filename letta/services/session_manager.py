@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from letta.log import get_logger
 from letta.orm.story import StorySession as StorySessionORM
 from letta.schemas.agent import AgentType, CreateAgent
+from letta.schemas.block import CreateBlock
 from letta.schemas.message import MessageCreate, MessageRole
 from letta.schemas.story import (
     Scene,
@@ -159,14 +160,19 @@ class SessionManager:
                 # Get first scene
                 first_scene = story.scenes[0]
                 
-                # Find player character
+                # Find player character (the one they're playing as)
                 player_character = next(
                     (char.name for char in story.characters if char.is_main_character),
                     None,
                 )
                 
-                # Get list of all character IDs for dialogue (normalized names)
-                available_characters = [char.character_id for char in story.characters if char.character_id]
+                # 🎮 FIRST-PERSON MODE: Get NPCs only (exclude main character)
+                # Player can only talk TO other characters, not to themselves
+                available_characters = [
+                    char.character_id 
+                    for char in story.characters 
+                    if char.character_id and not char.is_main_character
+                ]
                 
                 logger.info(f"✅ Available characters: {', '.join(available_characters)}")
                 
@@ -201,30 +207,32 @@ class SessionManager:
 
     async def resume_session(
         self,
-        session_id: str,
+        story_id: str,  # Changed: now accepts story_id to find active session
         actor: User,
     ) -> SessionResume:
         """
-        Resume an existing session.
+        Resume an existing session for a story.
+        
+        Finds and resumes the active session for the given story.
         
         Args:
-            session_id: Session to resume
+            story_id: Story ID to find active session for
             actor: User resuming
             
         Returns:
             Session resume data with current state
             
         Raises:
-            ValueError: Session not found
+            ValueError: No active session found for this story
         """
-        logger.info(f"▶️ Resuming session: {session_id}")
+        logger.info(f"▶️ Resuming session for story: {story_id}")
         
         try:
-            # Get session from database
-            session_data = await self._get_session_by_id(session_id, actor)
+            # Find active session for this story
+            session_data = await self._get_active_session(actor.id, story_id, actor)
             if not session_data:
-                logger.error(f"❌ Session not found: {session_id}")
-                raise ValueError(f"Session '{session_id}' not found")
+                logger.error(f"❌ No active session found for story: {story_id}")
+                raise ValueError(f"No active session found for story '{story_id}'. Start a new session first.")
             
             # Get story
             story = await self.story_manager.get_story(session_data.story_id, actor)
@@ -243,9 +251,12 @@ class SessionManager:
             # TODO: Get recent interaction history from agent messages
             recent_history = []
             
-            logger.info(f"✅ Session resumed: {session_id}, Scene {current_scene_num}")
+            logger.info(f"✅ Session resumed: {session_data.session_id}, Scene {current_scene_num}")
             
             return SessionResume(
+                success=True,
+                session_id=session_data.session_id,
+                story_title=story.title,
                 session=session_data,
                 current_scene=current_scene,
                 recent_history=recent_history,
@@ -341,36 +352,81 @@ class SessionManager:
         actor: User,
     ) -> Dict[str, str]:
         """
-        Create Letta agents for all story characters.
+        Create Letta agents for story characters.
+        
+        🎮 FIRST-PERSON MODE:
+        - Main character (isMainCharacter: true) is controlled by the player
+        - We only create agents for NPCs (non-main characters)
+        - Player IS the main character, not talking TO them
         
         Args:
             story: Story definition
             actor: User creating agents
             
         Returns:
-            Dict of character_id -> agent_id
+            Dict of character_id -> agent_id (excludes main character)
         """
         character_agents = {}
         
         for character in story.characters:
+            # 🎮 FIRST-PERSON MODE: Skip main character (player controls them)
+            if character.is_main_character:
+                logger.info(f"  ⏭️ Skipping main character (player-controlled): {character.name}")
+                continue
+            
             try:
-                logger.debug(f"  🤖 Creating agent for {character.name}...")
+                logger.debug(f"  🤖 Creating agent for NPC: {character.name}...")
                 
-                # Build persona for the character
-                persona = self._build_character_persona(character, story)
+                # ============================================================
+                # Build Core Memory Blocks (Letta's persistent memory system)
+                # ============================================================
                 
-                # Build human context (game/story context)
-                human_context = self._build_story_context(story)
+                # Block 1: persona - Character identity and guidelines
+                persona_value = self._build_character_persona(character, story)
                 
-                # Create agent
-                # Use Gemini 2.5 Flash (latest non-deprecated model) for fast, quality dialogue generation
+                # Block 2: human - Player info and story context
+                human_value = self._build_story_context(story)
+                
+                # Block 3: current_scene - Current scene context (starts with Scene 1)
+                # Get first scene to initialize scene context
+                first_scene = story.scenes[0] if story.scenes else None
+                if first_scene:
+                    scene_value = self._build_scene_context(first_scene)
+                else:
+                    # Fallback if no scenes exist
+                    scene_value = "=== CURRENT SCENE ===\nThe story is about to begin..."
+                
+                # Create memory blocks
+                memory_blocks = [
+                    CreateBlock(
+                        label="persona",
+                        value=persona_value,
+                        limit=2000,  # Character limit for block
+                    ),
+                    CreateBlock(
+                        label="human",
+                        value=human_value,
+                        limit=2000,
+                    ),
+                    CreateBlock(
+                        label="current_scene",
+                        value=scene_value,
+                        limit=1000,
+                    ),
+                ]
+                
+                logger.debug(f"    📝 Created {len(memory_blocks)} core memory blocks for {character.name}")
+                
+                # ============================================================
+                # Create Agent with Core Memory Blocks
+                # ============================================================
+                
+                # Use Gemini 2.0 Flash (latest model) for fast, quality dialogue generation
                 # Can be overridden via environment variable DEFAULT_STORY_MODEL
                 import os
                 from letta.schemas.llm_config import LLMConfig
                 from letta.schemas.embedding_config import EmbeddingConfig
                 
-                # ✅ FIXED: Upgraded to Letta 0.8.17 - Gemini streaming bugs resolved!
-                # Using Gemini 2.0 Flash (no provider prefix - Google API expects just model name)
                 default_model = os.getenv("DEFAULT_STORY_MODEL", "gemini-2.0-flash-001")
                 
                 # Build LLM config for Gemini 2.0 Flash
@@ -392,8 +448,7 @@ class SessionManager:
                 create_agent = CreateAgent(
                     name=f"Story-{character.name}-{character.character_id}",
                     description=f"Character from story '{story.title}': {character.name}",
-                    persona=persona,
-                    human=human_context,
+                    memory_blocks=memory_blocks,  # ✅ NEW: Core memory blocks!
                     agent_type=AgentType.memgpt_agent,
                     llm_config=llm_config,
                     embedding_config=embedding_config,
@@ -419,44 +474,190 @@ class SessionManager:
         
         return character_agents
 
+    def _build_story_narrative(self, story: Story) -> str:
+        """
+        Build concise story narrative for character awareness (under 600 chars).
+        """
+        # Concise character list (names only)
+        cast_list = ', '.join([c.name for c in story.characters[:8]])  # Max 8 chars
+        if len(story.characters) > 8:
+            cast_list += f" +{len(story.characters) - 8} more"
+        
+        # Concise scene list (titles only)
+        scene_list = ' → '.join([s.title for s in story.scenes[:5]])  # Max 5 scenes
+        if len(story.scenes) > 5:
+            scene_list += f" +{len(story.scenes) - 5} more"
+        
+        return f"STORY: {story.title}\nCAST: {cast_list}\nSCENES: {scene_list}"
+
     def _build_character_persona(self, character: StoryCharacter, story: Story) -> str:
-        """Build persona string for character agent"""
+        """
+        Build rich persona string for character agent.
+        
+        Includes:
+        - Character identity (name, age, gender, role)
+        - Relationship to main character
+        - Story world context
+        - FULL STORY NARRATIVE (all scenes, characters, plot)
+        - Behavioral guidelines
+        """
+        # Find main character for relationship context
+        main_character = next(
+            (char for char in story.characters if char.is_main_character),
+            None
+        )
+        
         persona_parts = [
             f"You are {character.name}, a character in the story '{story.title}'.",
             "",
-            f"Age: {character.age}",
-            f"Gender: {character.sex}",
+            "IDENTITY:",
+            f"• Name: {character.name}",
+            f"• Age: {character.age}",
+            f"• Gender: {character.sex}",
         ]
         
+        # Add role
         if character.is_main_character:
-            persona_parts.append("Role: You are the main character (controlled by the player)")
+            persona_parts.append("• Role: Main character (controlled by the player)")
         else:
-            persona_parts.append("Role: You are an NPC character in the story")
+            persona_parts.append("• Role: Supporting character (NPC)")
         
+        # Add relationship to main character (if not the main character)
+        if not character.is_main_character and main_character:
+            persona_parts.extend([
+                "",
+                "RELATIONSHIP:",
+                f"• You are interacting with {main_character.name}, the main character",
+                f"• {main_character.name} is the player (they are experiencing this story through {main_character.name})",
+            ])
+        
+        # Add story context
+        if story.description:
+            persona_parts.extend([
+                "",
+                "STORY WORLD:",
+                f"• Setting: {story.description}",
+                "• You are part of this interactive story experience",
+            ])
+        
+        # ⭐ NEW: Add full story narrative (all scenes, characters, plot)
         persona_parts.extend([
             "",
-            "Important guidelines:",
-            "- Stay in character at all times",
-            "- Remember all interactions with the player",
-            "- Be consistent with the story world",
-            "- Respond naturally to what the player says",
+            self._build_story_narrative(story),
+        ])
+        
+        # Add behavioral guidelines (from Letta's best practices)
+        persona_parts.extend([
+            "",
+            "IMPORTANT GUIDELINES:",
+            "• Stay in character at all times - you ARE this character",
+            "• Remember all interactions and conversations",
+            "• Be consistent with the story world and your role",
+            "• Respond naturally and authentically to what the player says",
+            "• React emotionally and meaningfully based on your character",
         ])
         
         return "\n".join(persona_parts)
 
     def _build_story_context(self, story: Story) -> str:
-        """Build story context for agent"""
-        context_parts = [
-            f"You are in the story: {story.title}",
-        ]
+        """
+        Build story context for agent (human block).
+        
+        Tells NPCs:
+        - Who the player is (main character name)
+        - Story title and description
+        - How to interact with the player
+        
+        This is the 'human' block in Letta's core memory system.
+        """
+        # Find main character (who the player is)
+        main_character = next(
+            (char for char in story.characters if char.is_main_character),
+            None
+        )
+        
+        context_parts = []
+        
+        # Section 1: Player Information
+        if main_character:
+            context_parts.extend([
+                "=== PLAYER INFORMATION ===",
+                f"You are interacting with {main_character.name}, the main character of this story.",
+                f"{main_character.name} is the player - they are experiencing the story through {main_character.name}'s perspective.",
+                "",
+            ])
+        else:
+            context_parts.extend([
+                "=== PLAYER INFORMATION ===",
+                "You are interacting with the player who is experiencing this story.",
+                "",
+            ])
+        
+        # Section 2: Story Context
+        context_parts.extend([
+            "=== STORY CONTEXT ===",
+            f"Story Title: {story.title}",
+        ])
         
         if story.description:
-            context_parts.append(f"Story description: {story.description}")
+            context_parts.append(f"Description: {story.description}")
         
+        # Section 3: Interaction Guidelines
         context_parts.extend([
             "",
-            "You are interacting with a player who is experiencing this story.",
-            "Respond naturally and help bring the story to life.",
+            "=== INTERACTION GUIDELINES ===",
+            f"• Respond naturally to what {main_character.name if main_character else 'the player'} says",
+            "• Stay in character and bring the story to life",
+            "• Remember your relationship and history with this character",
+            "• Be authentic and emotionally responsive",
+        ])
+        
+        return "\n".join(context_parts)
+    
+    def _build_scene_context(self, scene: Scene) -> str:
+        """
+        Build current scene context for agent (current_scene block).
+        
+        This block gets updated when scenes change during gameplay.
+        
+        Provides:
+        - Scene number and title
+        - Location/setting
+        - Mood/atmosphere
+        - Brief context (minimal, useful)
+        
+        Args:
+            scene: Current scene object
+            
+        Returns:
+            Formatted scene context string
+        """
+        context_parts = [
+            "=== CURRENT SCENE ===",
+            f"Scene {scene.scene_number}: {scene.title}",
+            "",
+        ]
+        
+        # Add location
+        if scene.location:
+            context_parts.append(f"Location: {scene.location}")
+        
+        # Extract mood from scene (if available in instructions)
+        # Look for mood indicators in the setting description
+        mood_indicators = []
+        if "mood:" in scene.location.lower():
+            # Extract mood from "Mood: desperate, fearful" format
+            mood_part = scene.location.lower().split("mood:")[-1].strip()
+            mood_indicators.append(f"Mood: {mood_part}")
+        
+        if mood_indicators:
+            context_parts.extend(mood_indicators)
+        
+        # Add minimal context
+        context_parts.extend([
+            "",
+            "You are currently in this scene of the story.",
+            "Respond naturally to what happens and what the player says.",
         ])
         
         return "\n".join(context_parts)

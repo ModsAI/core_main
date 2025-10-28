@@ -403,8 +403,6 @@ class GoogleVertexClient(LLMClientBase):
                     # This means the response is malformed like MALFORMED_FUNCTION_CALL
                     # 🚨 MALFORMED_FUNCTION_CALL FIX: Handle gracefully for image generation
                     if candidate.finish_reason == "MALFORMED_FUNCTION_CALL":
-                        from letta.log import get_logger
-                        logger = get_logger(__name__)
                         logger.warning(f"🚨 MALFORMED_FUNCTION_CALL detected: {candidate.finish_message[:350]}...")
                         
                         # Check if this is an image generation request
@@ -413,8 +411,7 @@ class GoogleVertexClient(LLMClientBase):
                             if any(keyword in message for keyword in ['image', 'generate', 'picture', 'photo']):
                                 logger.info("🎨 Detected malformed image generation call - providing fallback")
                                 # Create a fallback function call for image generation
-                                import json
-                                import uuid
+                                # json and uuid are already imported globally (lines 1-2)
                                 
                                 # Extract prompt from the malformed message if possible
                                 prompt = "beautiful image"  # default
@@ -448,12 +445,10 @@ class GoogleVertexClient(LLMClientBase):
                                 )
                                 
                                 # Create a choice with the fallback
-                                from openai.types.chat.chat_completion import Choice
-                                from openai.types.chat.chat_completion_message import ChatCompletionMessage
-                                
+                                # Choice and Message are already imported globally (line 26)
                                 fallback_choice = Choice(
                                     index=index,
-                                    message=ChatCompletionMessage(
+                                    message=Message(
                                         role="assistant",
                                         content=None,
                                         tool_calls=[mock_tool_call]

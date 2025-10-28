@@ -252,20 +252,22 @@ async def start_session(
         )
 
 
-@router.get("/sessions/{session_id}/resume", response_model=SessionResume)
+@router.post("/sessions/resume", response_model=SessionResume)
 async def resume_session(
-    session_id: str,
+    session_resume: SessionCreate,  # Changed: now takes story_id in body
     server: "SyncServer" = Depends(get_letta_server),
     actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
     Resume an existing session.
     
-    Returns current session state, current scene, and recent interaction history.
+    Finds and resumes the active session for a given story.
     
-    **Example:**
-    ```
-    GET /api/v1/story/sessions/session-abc123/resume
+    **Example Request:**
+    ```json
+    {
+        "story_id": "story-1005"
+    }
     ```
     
     **Returns:**
@@ -275,17 +277,17 @@ async def resume_session(
     - Recent chat history
     
     **Errors:**
-    - 404: Session not found
+    - 404: No active session found for this story
     - 500: Database error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
-    logger.info(f"▶️ Session resume request: {session_id} (user: {actor.id})")
+    logger.info(f"▶️ Session resume request: {session_resume.story_id} (user: {actor.id})")
     
     try:
         session_manager = SessionManager()
-        response = await session_manager.resume_session(session_id, actor)
+        response = await session_manager.resume_session(session_resume.story_id, actor)
         
-        logger.info(f"✅ Session resumed: {session_id}")
+        logger.info(f"✅ Session resumed for story: {session_resume.story_id}")
         return response
     
     except ValueError as e:
@@ -296,9 +298,9 @@ async def resume_session(
                 "error": "SESSION_NOT_FOUND",
                 "message": str(e),
                 "suggestions": [
-                    f"Verify session ID '{session_id}' exists",
-                    "Check if session belongs to your user",
-                    "Session may have been deleted",
+                    f"No active session found for story '{session_resume.story_id}'",
+                    "Start a new session with POST /api/v1/story/sessions/start",
+                    "Session may have been deleted or expired",
                 ]
             }
         )
