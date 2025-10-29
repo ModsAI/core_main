@@ -772,12 +772,20 @@ class SessionManager:
 
     def _convert_to_schema(self, session_orm: StorySessionORM) -> StorySession:
         """Convert ORM to Pydantic schema"""
+        # Q7 DEBUG: Log what we're deserializing
+        logger.debug(f"🔍 Converting ORM to schema - state keys: {session_orm.state.keys()}")
+        logger.debug(f"🔍 completed_narration_beats in state: {session_orm.state.get('completed_narration_beats', 'KEY NOT FOUND')}")
+        
+        # Deserialize state
+        session_state = SessionState(**session_orm.state)
+        logger.debug(f"🔍 After SessionState init: {len(session_state.completed_narration_beats)} narration beats")
+        
         return StorySession(
             session_id=session_orm.session_id,
             user_id=session_orm.user_id,
             story_id=session_orm.story_id,
             status=SessionStatus(session_orm.status),
-            state=SessionState(**session_orm.state),
+            state=session_state,
             character_agents=session_orm.character_agents,
             created_at=session_orm.created_at,
             updated_at=session_orm.updated_at,
@@ -984,7 +992,7 @@ class SessionManager:
                         "timing_hint": beat.get("timing_hint"),
                         "sfx": beat.get("sfx"),
                         "music_cue": None,
-                    }
+                }
         
         # All available beats completed in this scene
         # (Either truly complete, or remaining beats have unsatisfied dependencies)
