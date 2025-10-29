@@ -884,10 +884,11 @@ async def skip_beat_manually(
         
         logger.debug(f"  ✓ Beat marked complete - Progress: {progress:.2%}, Scene complete: {scene_complete}")
         
-        # Save to database (Q7 FIX: Use model_dump for proper JSON serialization)
+        # Save to database (Q7 FIX: Fetch and modify ORM object directly)
         logger.debug(f"  → Saving to database...")
         logger.debug(f"  → State before save: D={len(session.state.completed_dialogue_beats)}, N={len(session.state.completed_narration_beats)}, A={len(session.state.completed_action_beats)}")
-        from sqlalchemy import update
+        from sqlalchemy import select, update
+        from sqlalchemy.orm import selectinload
         from letta.orm.story import StorySession as StorySessionORM
         
         # Serialize state properly for JSON storage
@@ -896,13 +897,16 @@ async def skip_beat_manually(
         
         async with db_registry.async_session() as db_session:
             async with db_session.begin():
-                stmt = (
-                    update(StorySessionORM)
-                    .where(StorySessionORM.session_id == session_id)
-                    .values(state=state_dict)
-                )
+                # Fetch the ORM object
+                stmt = select(StorySessionORM).where(StorySessionORM.session_id == session_id)
                 result = await db_session.execute(stmt)
-                logger.debug(f"  ✓ Database updated - Rows affected: {result.rowcount}")
+                session_orm = result.scalar_one()
+                
+                # Update the state directly
+                session_orm.state = state_dict
+                
+                # SQLAlchemy will auto-commit on context exit
+                logger.debug(f"  ✓ Database updated via ORM object modification")
         
         logger.info(f"✅ Q7 Beat Skip SUCCESS - {beat_id} ({beat_type}) - Progress: {progress:.2%}")
         
