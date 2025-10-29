@@ -884,17 +884,22 @@ async def skip_beat_manually(
         
         logger.debug(f"  ✓ Beat marked complete - Progress: {progress:.2%}, Scene complete: {scene_complete}")
         
-        # Save to database
+        # Save to database (Q7 FIX: Use model_dump for proper JSON serialization)
         logger.debug(f"  → Saving to database...")
+        logger.debug(f"  → State before save: D={len(session.state.completed_dialogue_beats)}, N={len(session.state.completed_narration_beats)}, A={len(session.state.completed_action_beats)}")
         from sqlalchemy import update
         from letta.orm.story import StorySession as StorySessionORM
+        
+        # Serialize state properly for JSON storage
+        state_dict = session.state.model_dump(mode='json') if hasattr(session.state, 'model_dump') else session.state.dict()
+        logger.debug(f"  → Narration beats in serialized state: {state_dict.get('completed_narration_beats', [])}")
         
         async with db_registry.async_session() as db_session:
             async with db_session.begin():
                 stmt = (
                     update(StorySessionORM)
                     .where(StorySessionORM.session_id == session_id)
-                    .values(state=session.state.dict())
+                    .values(state=state_dict)
                 )
                 result = await db_session.execute(stmt)
                 logger.debug(f"  ✓ Database updated - Rows affected: {result.rowcount}")
