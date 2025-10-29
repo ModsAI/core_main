@@ -113,6 +113,29 @@ class DialogueManager:
             current_scene = story.scenes[current_scene_num - 1]  # 1-indexed
             logger.debug(f"  📍 Current scene: {current_scene.title}")
             
+            # Q8: Character Presence Validation - Ensure character is in current scene
+            if request.target_character not in current_scene.characters:
+                # Get character names for better error message
+                present_character_names = []
+                for char_id in current_scene.characters:
+                    char = next((c for c in story.characters if c.character_id == char_id), None)
+                    if char:
+                        present_character_names.append(f"{char.name} ({char_id})")
+                
+                # Find target character name
+                target_char_obj = next(
+                    (c for c in story.characters if c.character_id == request.target_character),
+                    None
+                )
+                target_name = target_char_obj.name if target_char_obj else request.target_character
+                
+                raise ValueError(
+                    f"❌ Character '{target_name}' is not present in the current scene! "
+                    f"Current scene: '{current_scene.title}' (Scene {current_scene_num}). "
+                    f"Characters present: {', '.join(present_character_names) if present_character_names else 'None'}. "
+                    f"You can only talk to characters who are in the current scene."
+                )
+            
             # Step 3: Get character agent
             agent_id = session.character_agents.get(request.target_character)
             if not agent_id:

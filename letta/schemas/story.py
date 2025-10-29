@@ -61,7 +61,7 @@ class StoryInstruction(BaseModel):
     # Dialogue/Action fields
     character: Optional[str] = Field(None, description="Character name")
     action: Optional[str] = Field(None, description="Action description")
-    
+
     # Q2: Manual topic specification (optional)
     topic: Optional[str] = Field(None, description="Manual topic override (for dialogue beats)")
     

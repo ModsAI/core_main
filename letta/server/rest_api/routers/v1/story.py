@@ -10,8 +10,10 @@ Provides endpoints for:
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import JSONResponse
 
 from letta.log import get_logger
+from letta.server.db import db_registry
 from letta.schemas.story import (
     SessionCreate,
     SessionResume,
@@ -564,6 +566,162 @@ async def generate_dialogue(
                     "Ensure agent exists for character",
                     "Try again in a moment",
                 ]
+            }
+        )
+
+
+@router.post("/sessions/{session_id}/advance-scene")
+async def advance_scene_manually(
+    session_id: str,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Manually advance to the next scene (Q6: Manual Override).
+    
+    **Purpose:**
+    This endpoint allows Unity to manually force scene transition when:
+    - Auto-advance fails or gets stuck
+    - Player explicitly clicks "Next Scene" button
+    - Scene is logically complete but system doesn't detect it
+    
+    **How It Works:**
+    1. Gets current session state
+    2. Increments scene number
+    3. Resets beat progress for new scene
+    4. Updates session in database
+    
+    **Use Case:**
+    - Auto-advance didn't trigger (beat detection failed)
+    - Player wants to skip to next scene
+    - QA testing / debugging
+    
+    **Example Request:**
+    ```
+    POST /v1/story/sessions/session-abc-123/advance-scene
+    ```
+    
+    **Example Response:**
+    ```json
+    {
+        "success": true,
+        "previous_scene": 1,
+        "new_scene": 2,
+        "message": "Advanced to Scene 2: The System's Whispers"
+    }
+    ```
+    
+    **Returns:**
+    - Success status
+    - Previous and new scene numbers
+    - New scene title
+    
+    **Errors:**
+    - 404: Session not found
+    - 400: Already at last scene
+    """
+    from letta.services.session_manager import SessionManager
+    
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"📍 Q6 Manual Scene Advance - Session: {session_id}, User: {actor.id}")
+    
+    try:
+        session_manager = SessionManager()
+        logger.debug(f"  ✓ SessionManager initialized")
+        
+        # Get current session
+        session = await session_manager._get_session_by_id(session_id, actor)
+        if not session:
+            logger.warning(f"  ✗ Session not found: {session_id}")
+            raise ValueError(f"Session '{session_id}' not found")
+        logger.debug(f"  ✓ Session retrieved - Story: {session.story_id}, Current Scene: {session.state.current_scene_number}")
+        
+        # Get story
+        from letta.services.story_manager import StoryManager
+        story_manager = StoryManager()
+        story = await story_manager.get_story(session.story_id, actor)
+        
+        if not story:
+            logger.warning(f"  ✗ Story not found: {session.story_id}")
+            raise ValueError(f"Story '{session.story_id}' not found")
+        logger.debug(f"  ✓ Story retrieved - Title: '{story.title}', Total Scenes: {len(story.scenes)}")
+        
+        # Check if we can advance
+        current_scene = session.state.current_scene_number
+        logger.debug(f"  → Checking advancement: Current={current_scene}, Total={len(story.scenes)}")
+        
+        if current_scene >= len(story.scenes):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "SCENE_ADVANCE_ERROR",
+                    "message": f"Already at last scene ({current_scene} of {len(story.scenes)})",
+                    "suggestions": ["Story is complete", "Cannot advance further"]
+                }
+            )
+        
+        # Advance to next scene
+        previous_scene = current_scene
+        new_scene_num = current_scene + 1
+        new_scene = story.scenes[new_scene_num - 1]
+        logger.info(f"  ⏩ Advancing from Scene {previous_scene} to Scene {new_scene_num}: '{new_scene.title}'")
+        
+        # Update session state
+        logger.debug(f"  → Updating session state...")
+        session.state.current_scene_number = new_scene_num
+        session.state.current_instruction_index = 0
+        completed_beats_before = len(session.state.completed_dialogue_beats)
+        session.state.completed_dialogue_beats = []  # Reset for new scene
+        logger.debug(f"  ✓ State updated - Reset {completed_beats_before} completed beats for new scene")
+        
+        # Save to database
+        logger.debug(f"  → Saving to database...")
+        from sqlalchemy import update
+        from letta.orm.story import StorySession as StorySessionORM
+        
+        async with db_registry.async_session() as db_session:
+            async with db_session.begin():
+                stmt = (
+                    update(StorySessionORM)
+                    .where(StorySessionORM.session_id == session_id)
+                    .values(state=session.state.dict())
+                )
+                result = await db_session.execute(stmt)
+                logger.debug(f"  ✓ Database updated - Rows affected: {result.rowcount}")
+        
+        logger.info(f"✅ Q6 Scene Advance SUCCESS - {previous_scene} → {new_scene_num} ('{new_scene.title}')")
+        
+        return {
+            "success": True,
+            "previous_scene": previous_scene,
+            "new_scene": new_scene_num,
+            "new_scene_title": new_scene.title,
+            "new_scene_location": new_scene.location,
+            "message": f"Advanced to Scene {new_scene_num}: {new_scene.title}",
+            "total_scenes": len(story.scenes)
+        }
+    
+    except ValueError as e:
+        logger.error(f"❌ Q6 Manual Scene Advance FAILED (ValueError): {e}")
+        logger.debug(f"  Context - Session: {session_id}, User: {actor.id}")
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "SCENE_ADVANCE_ERROR",
+                "message": str(e),
+                "suggestions": ["Verify session ID", "Check story exists"]
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"❌ Q6 Manual Scene Advance FAILED (Exception): {e}", exc_info=True)
+        logger.debug(f"  Context - Session: {session_id}, User: {actor.id}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "SCENE_ADVANCE_ERROR",
+                "message": f"Failed to advance scene: {str(e)}",
+                "suggestions": ["Check server logs", "Try again", "Contact support if issue persists"]
             }
         )
 
