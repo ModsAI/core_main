@@ -726,6 +726,220 @@ async def advance_scene_manually(
         )
 
 
+@router.post("/sessions/{session_id}/skip-beat")
+async def skip_beat_manually(
+    session_id: str,
+    beat_id: str,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Q7: Manually skip/override a beat if story gets stuck.
+    
+    **Purpose:**
+    This endpoint allows Unity or QA to force-complete a beat when:
+    - Beat detection fails (keywords don't match)
+    - Story gets stuck on a beat
+    - QA testing needs to skip content
+    - Player explicitly wants to skip
+    
+    **How It Works:**
+    1. Gets current session and story
+    2. Validates beat exists and is pending
+    3. Marks beat as completed in session state
+    4. Updates database
+    5. Returns updated session state
+    
+    **Use Cases:**
+    - Beat keyword matching failed
+    - Dialogue went off-script but covered topic
+    - QA testing / debugging
+    - Player skip button
+    
+    **Example Request:**
+    ```
+    POST /v1/story/sessions/session-abc-123/skip-beat?beat_id=scene-1-beat-2
+    ```
+    
+    **Example Response:**
+    ```json
+    {
+        "success": true,
+        "beat_id": "scene-1-beat-2",
+        "beat_type": "dialogue",
+        "message": "Beat skipped: scene-1-beat-2 (dialogue)",
+        "new_progress": 0.66,
+        "scene_complete": false
+    }
+    ```
+    
+    **Returns:**
+    - Success status
+    - Skipped beat ID and type
+    - Updated progress
+    - Scene completion status
+    
+    **Errors:**
+    - 404: Session not found
+    - 404: Beat not found
+    - 400: Beat already completed
+    """
+    from letta.services.session_manager import SessionManager
+    from letta.services.story_manager import StoryManager
+    
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"📍 Q7 Beat Skip Request - Session: {session_id}, Beat: {beat_id}, User: {actor.id}")
+    
+    try:
+        session_manager = SessionManager()
+        story_manager = StoryManager()
+        logger.debug(f"  ✓ Managers initialized")
+        
+        # Get session
+        session = await session_manager._get_session_by_id(session_id, actor)
+        if not session:
+            logger.warning(f"  ✗ Session not found: {session_id}")
+            raise ValueError(f"Session '{session_id}' not found")
+        logger.debug(f"  ✓ Session retrieved - Scene: {session.state.current_scene_number}")
+        
+        # Get story
+        story = await story_manager.get_story(session.story_id, actor)
+        if not story:
+            logger.warning(f"  ✗ Story not found: {session.story_id}")
+            raise ValueError(f"Story '{session.story_id}' not found")
+        logger.debug(f"  ✓ Story retrieved - '{story.title}'")
+        
+        # Find beat in current scene
+        current_scene_num = session.state.current_scene_number
+        current_scene = story.scenes[current_scene_num - 1]
+        
+        beat_type = None
+        beat_found = None
+        
+        # Check dialogue beats
+        for beat in current_scene.dialogue_beats:
+            if beat.get("beat_id") == beat_id:
+                beat_found = beat
+                beat_type = "dialogue"
+                break
+        
+        # Q5: Check narration beats
+        if not beat_found:
+            for beat in current_scene.narration_beats:
+                if beat.get("beat_id") == beat_id:
+                    beat_found = beat
+                    beat_type = "narration"
+                    break
+        
+        # Q5: Check action beats
+        if not beat_found:
+            for beat in current_scene.action_beats:
+                if beat.get("beat_id") == beat_id:
+                    beat_found = beat
+                    beat_type = "action"
+                    break
+        
+        if not beat_found:
+            logger.error(f"  ✗ Beat not found: {beat_id}")
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "BEAT_NOT_FOUND",
+                    "message": f"Beat '{beat_id}' not found in current scene",
+                    "suggestions": ["Check beat ID", "Verify you're in the correct scene"]
+                }
+            )
+        
+        logger.debug(f"  ✓ Beat found - Type: {beat_type}, Priority: {beat_found.get('priority', 'required')}")
+        
+        # Check if already completed
+        completed_list = {
+            "dialogue": session.state.completed_dialogue_beats,
+            "narration": session.state.completed_narration_beats,
+            "action": session.state.completed_action_beats,
+        }[beat_type]
+        
+        if beat_id in completed_list:
+            logger.warning(f"  ⚠️ Beat already completed: {beat_id}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "BEAT_ALREADY_COMPLETED",
+                    "message": f"Beat '{beat_id}' is already completed",
+                    "suggestions": ["Check session state", "Use different beat ID"]
+                }
+            )
+        
+        # Mark beat as completed
+        logger.info(f"  ⏭️ Skipping beat: {beat_id} ({beat_type})")
+        completed_list.append(beat_id)
+        
+        # Calculate new progress
+        from letta.services.dialogue_manager import DialogueManager
+        dialogue_manager = DialogueManager()
+        scene_complete, progress = dialogue_manager._check_scene_completion(
+            current_scene,
+            session.state.completed_dialogue_beats
+        )
+        
+        logger.debug(f"  ✓ Beat marked complete - Progress: {progress:.2%}, Scene complete: {scene_complete}")
+        
+        # Save to database
+        logger.debug(f"  → Saving to database...")
+        from sqlalchemy import update
+        from letta.orm.story import StorySession as StorySessionORM
+        
+        async with db_registry.async_session() as db_session:
+            async with db_session.begin():
+                stmt = (
+                    update(StorySessionORM)
+                    .where(StorySessionORM.session_id == session_id)
+                    .values(state=session.state.dict())
+                )
+                result = await db_session.execute(stmt)
+                logger.debug(f"  ✓ Database updated - Rows affected: {result.rowcount}")
+        
+        logger.info(f"✅ Q7 Beat Skip SUCCESS - {beat_id} ({beat_type}) - Progress: {progress:.2%}")
+        
+        return {
+            "success": True,
+            "beat_id": beat_id,
+            "beat_type": beat_type,
+            "message": f"Beat skipped: {beat_id} ({beat_type})",
+            "new_progress": round(progress, 3),
+            "scene_complete": scene_complete,
+            "total_completed": {
+                "dialogue": len(session.state.completed_dialogue_beats),
+                "narration": len(session.state.completed_narration_beats),
+                "action": len(session.state.completed_action_beats),
+            }
+        }
+    
+    except ValueError as e:
+        logger.error(f"❌ Q7 Beat Skip FAILED (ValueError): {e}")
+        logger.debug(f"  Context - Session: {session_id}, Beat: {beat_id}, User: {actor.id}")
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "BEAT_SKIP_ERROR",
+                "message": str(e),
+                "suggestions": ["Verify session ID", "Check story exists", "Verify beat ID"]
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"❌ Q7 Beat Skip FAILED (Exception): {e}", exc_info=True)
+        logger.debug(f"  Context - Session: {session_id}, Beat: {beat_id}, User: {actor.id}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "BEAT_SKIP_ERROR",
+                "message": f"Failed to skip beat: {str(e)}",
+                "suggestions": ["Check server logs", "Try again", "Contact support if issue persists"]
+            }
+        )
+
+
 # ============================================================
 # GET Endpoints for Unity Integration (Kon's Requirements)
 # ============================================================

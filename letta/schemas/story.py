@@ -68,6 +68,14 @@ class StoryInstruction(BaseModel):
     # Q4: Beat ordering and priority
     priority: Optional[str] = Field(None, description="Beat priority: 'required' or 'optional'")
     requires_beats: Optional[List[str]] = Field(None, description="Beat IDs that must be completed before this one")
+    
+    # Q9: Beat metadata enrichment (for Unity rendering)
+    emotion: Optional[str] = Field(None, description="Character emotion (e.g., 'happy', 'sad', 'angry')")
+    animation: Optional[str] = Field(None, description="Animation to play (e.g., 'wave', 'nod', 'gesture_talk')")
+    camera_angle: Optional[str] = Field(None, description="Suggested camera angle (e.g., 'close_up', 'medium', 'wide')")
+    timing_hint: Optional[float] = Field(None, description="Suggested duration in seconds")
+    sfx: Optional[str] = Field(None, description="Sound effect to play")
+    music_cue: Optional[str] = Field(None, description="Music cue or track name")
 
 
 class StoryUpload(BaseModel):
@@ -95,6 +103,10 @@ class Scene(BaseModel):
     instructions: List[StoryInstruction] = Field(..., description="Instructions in this scene")
     characters: List[str] = Field(..., description="Characters present in scene")
     dialogue_beats: List[Dict[str, Any]] = Field(default_factory=list, description="Dialogue beats to track")
+    
+    # Q5: Track narrations and actions as checkpoints
+    narration_beats: List[Dict[str, Any]] = Field(default_factory=list, description="Narration checkpoints to track (Q5)")
+    action_beats: List[Dict[str, Any]] = Field(default_factory=list, description="Action checkpoints to track (Q5)")
 
 
 class Story(BaseModel):
@@ -122,6 +134,11 @@ class SessionState(BaseModel):
     current_scene_number: int = Field(0, description="Current scene number")
     current_instruction_index: int = Field(0, description="Current instruction index in scene")
     completed_dialogue_beats: List[str] = Field(default_factory=list, description="Completed dialogue beat IDs")
+    
+    # Q5: Track narrations and actions as checkpoints
+    completed_narration_beats: List[str] = Field(default_factory=list, description="Completed narration checkpoint IDs (Q5)")
+    completed_action_beats: List[str] = Field(default_factory=list, description="Completed action checkpoint IDs (Q5)")
+    
     character_relationships: Dict[str, float] = Field(default_factory=dict, description="Character relationship scores")
     player_choices: List[Dict[str, Any]] = Field(default_factory=list, description="Choices made by player")
     variables: Dict[str, Any] = Field(default_factory=dict, description="Story variables")
@@ -286,6 +303,14 @@ class NextInstructionInfo(BaseModel):
     priority: Optional[str] = Field(None, description="Beat priority: 'required' or 'optional' (Q4)")
     requires_beats: Optional[List[str]] = Field(None, description="Beat IDs that must be completed first (Q4)")
     instruction_details: Optional[InstructionDetails] = Field(None, description="Additional guidance")
+    
+    # Q9: Beat metadata enrichment for Unity rendering
+    emotion: Optional[str] = Field(None, description="Character emotion (Q9)")
+    animation: Optional[str] = Field(None, description="Animation to play (Q9)")
+    camera_angle: Optional[str] = Field(None, description="Suggested camera angle (Q9)")
+    timing_hint: Optional[float] = Field(None, description="Suggested duration in seconds (Q9)")
+    sfx: Optional[str] = Field(None, description="Sound effect to play (Q9)")
+    music_cue: Optional[str] = Field(None, description="Music cue or track name (Q9)")
 
 
 class ProgressInfo(BaseModel):

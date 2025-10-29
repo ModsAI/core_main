@@ -341,19 +341,96 @@ class StoryManager:
                             "priority": priority,  # Q4: required or optional
                             "requires_beats": requires_beats,  # Q4: Dependencies
                             "is_completed": False,
+                            # Q9: Beat metadata enrichment
+                            "emotion": instruction.emotion,
+                            "animation": instruction.animation,
+                            "camera_angle": instruction.camera_angle,
+                            "timing_hint": instruction.timing_hint,
+                            "sfx": instruction.sfx,
+                            "music_cue": instruction.music_cue,
                         }
                         current_scene.dialogue_beats.append(dialogue_beat)
                         
                         logger.debug(
                             f"    💬 Beat {beat_id} (global #{global_beat_number}): "
                             f"{instruction.character} - {topic[:30]}... [{priority}]"
+                            + (f" emotion={instruction.emotion}" if instruction.emotion else "")
+                        )
+                    
+                    # Q5: Track narration beats (checkpoints)
+                    elif instruction.type == "narration":
+                        global_beat_number += 1
+                        narration_number = len(current_scene.narration_beats) + 1
+                        narration_id = f"{current_scene.scene_id}-narration-{narration_number}"
+                        
+                        priority = instruction.priority or "required"
+                        requires_beats = instruction.requires_beats or []
+                        
+                        narration_beat = {
+                            "beat_id": narration_id,
+                            "beat_number": narration_number,
+                            "global_beat_number": global_beat_number,
+                            "text": instruction.text,
+                            "priority": priority,
+                            "requires_beats": requires_beats,
+                            "is_completed": False,
+                            # Q9: Metadata
+                            "camera_angle": instruction.camera_angle,
+                            "timing_hint": instruction.timing_hint,
+                            "sfx": instruction.sfx,
+                            "music_cue": instruction.music_cue,
+                        }
+                        current_scene.narration_beats.append(narration_beat)
+                        
+                        logger.debug(
+                            f"    📖 Narration {narration_id} (global #{global_beat_number}): "
+                            f"{instruction.text[:30] if instruction.text else 'N/A'}... [{priority}]"
+                        )
+                    
+                    # Q5: Track action beats (checkpoints)
+                    elif instruction.type == "action":
+                        global_beat_number += 1
+                        action_number = len(current_scene.action_beats) + 1
+                        action_id = f"{current_scene.scene_id}-action-{action_number}"
+                        
+                        priority = instruction.priority or "required"
+                        requires_beats = instruction.requires_beats or []
+                        
+                        action_beat = {
+                            "beat_id": action_id,
+                            "beat_number": action_number,
+                            "global_beat_number": global_beat_number,
+                            "character": instruction.character,
+                            "action_text": instruction.action or instruction.text,
+                            "priority": priority,
+                            "requires_beats": requires_beats,
+                            "is_completed": False,
+                            # Q9: Metadata
+                            "animation": instruction.animation,
+                            "camera_angle": instruction.camera_angle,
+                            "timing_hint": instruction.timing_hint,
+                            "sfx": instruction.sfx,
+                        }
+                        current_scene.action_beats.append(action_beat)
+                        
+                        logger.debug(
+                            f"    🎬 Action {action_id} (global #{global_beat_number}): "
+                            f"{instruction.character or 'N/A'} - {(instruction.action or instruction.text or '')[:30]}... [{priority}]"
                         )
         
         # Add last scene if exists
         if current_scene and current_scene not in scenes:
             scenes.append(current_scene)
         
-        logger.debug(f"✅ Parsed {len(scenes)} scenes with {global_beat_number} total beats")
+        # Count total beats by type (Q5)
+        total_dialogue = sum(len(scene.dialogue_beats) for scene in scenes)
+        total_narration = sum(len(scene.narration_beats) for scene in scenes)
+        total_action = sum(len(scene.action_beats) for scene in scenes)
+        
+        logger.debug(
+            f"✅ Parsed {len(scenes)} scenes with {global_beat_number} total checkpoints "
+            f"(Dialogue: {total_dialogue}, Narration: {total_narration}, Actions: {total_action})"
+        )
         return scenes
 
     def _extract_topic(self, text: str) -> str:
