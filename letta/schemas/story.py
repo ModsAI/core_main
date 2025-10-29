@@ -61,6 +61,13 @@ class StoryInstruction(BaseModel):
     # Dialogue/Action fields
     character: Optional[str] = Field(None, description="Character name")
     action: Optional[str] = Field(None, description="Action description")
+    
+    # Q2: Manual topic specification (optional)
+    topic: Optional[str] = Field(None, description="Manual topic override (for dialogue beats)")
+    
+    # Q4: Beat ordering and priority
+    priority: Optional[str] = Field(None, description="Beat priority: 'required' or 'optional'")
+    requires_beats: Optional[List[str]] = Field(None, description="Beat IDs that must be completed before this one")
 
 
 class StoryUpload(BaseModel):
@@ -234,4 +241,115 @@ class SessionRestartResponse(BaseModel):
     success: bool = Field(..., description="Restart success")
     session_id: str = Field(..., description="New or reset session ID")
     message: str = Field(..., description="What happened")
+
+
+# ============================================================
+# GET Endpoint Response Models (for Kon's Unity Integration)
+# ============================================================
+
+class CharacterInfo(BaseModel):
+    """Character information for Unity"""
+    character_id: str = Field(..., description="Character identifier")
+    name: str = Field(..., description="Character name")
+    age: int = Field(..., description="Character age")
+    sex: str = Field(..., description="Character gender")
+    model: Optional[str] = Field(None, description="3D model name for Unity")
+    role: Optional[str] = Field(None, description="Character role (auto-generated from name)")
+
+
+class CurrentSettingInfo(BaseModel):
+    """Current scene/setting information"""
+    scene_id: str = Field(..., description="Scene identifier")
+    scene_number: int = Field(..., description="Scene number in sequence")
+    scene_title: str = Field(..., description="Scene title")
+    location: str = Field(..., description="Scene location/environment")
+    total_scenes: int = Field(..., description="Total number of scenes in story")
+
+
+class InstructionDetails(BaseModel):
+    """Detailed guidance for next instruction"""
+    general_guidance: str = Field(..., description="General guidance for this beat")
+    emotional_tone: Optional[str] = Field(None, description="Suggested emotional tone")
+    keywords: List[str] = Field(default_factory=list, description="Keywords to track completion")
+
+
+class NextInstructionInfo(BaseModel):
+    """Next instruction/beat information"""
+    type: str = Field(..., description="Instruction type (dialogue/narration/action/setting/end)")
+    beat_id: Optional[str] = Field(None, description="Beat identifier (if dialogue)")
+    beat_number: Optional[int] = Field(None, description="Beat number in scene (if dialogue)")
+    global_beat_number: Optional[int] = Field(None, description="Global beat number across story (Q1)")
+    character: Optional[str] = Field(None, description="Character who should speak/act")
+    topic: Optional[str] = Field(None, description="What this beat is about")
+    script_text: Optional[str] = Field(None, description="Script text for this instruction")
+    is_completed: bool = Field(..., description="Whether this instruction is completed")
+    priority: Optional[str] = Field(None, description="Beat priority: 'required' or 'optional' (Q4)")
+    requires_beats: Optional[List[str]] = Field(None, description="Beat IDs that must be completed first (Q4)")
+    instruction_details: Optional[InstructionDetails] = Field(None, description="Additional guidance")
+
+
+class ProgressInfo(BaseModel):
+    """Story progress tracking"""
+    scene_progress: float = Field(..., description="Progress through current scene (0.0-1.0)")
+    beats_completed: List[str] = Field(..., description="List of completed beat IDs")
+    beats_remaining: List[str] = Field(..., description="List of remaining beat IDs")
+    total_beats_in_scene: int = Field(..., description="Total beats in current scene")
+    scene_complete: bool = Field(..., description="Is current scene complete")
+
+
+class SessionStateResponse(BaseModel):
+    """
+    Comprehensive session state for Unity integration.
+    
+    This is what Kon's server needs to:
+    - Get current scene/setting
+    - Get available characters
+    - Get next instruction/beat
+    - Track progress
+    """
+    # Story Context
+    story_id: str = Field(..., description="Story identifier")
+    story_title: str = Field(..., description="Story title")
+    session_id: str = Field(..., description="Session identifier")
+    session_status: str = Field(..., description="Session status (active/paused/completed)")
+    
+    # Current Setting
+    current_setting: CurrentSettingInfo = Field(..., description="Current scene information")
+    
+    # Characters
+    player_character: Optional[str] = Field(None, description="Player character name")
+    available_npcs: List[CharacterInfo] = Field(..., description="NPCs available for interaction")
+    
+    # Next Instruction
+    next_instruction: Optional[NextInstructionInfo] = Field(None, description="Next beat/instruction")
+    
+    # Progress
+    progress: ProgressInfo = Field(..., description="Story progress")
+    
+    # Metadata
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional session metadata")
+
+
+class StoryDetailResponse(BaseModel):
+    """
+    Full story structure for caching in Kon's server.
+    
+    Contains all scenes, characters, and instructions
+    so Unity can cache this data locally.
+    """
+    story_id: str = Field(..., description="Story identifier")
+    title: str = Field(..., description="Story title")
+    description: Optional[str] = Field(None, description="Story description")
+    
+    # Characters
+    characters: List[StoryCharacter] = Field(..., description="All story characters")
+    player_character: Optional[StoryCharacter] = Field(None, description="Main character (player)")
+    npcs: List[StoryCharacter] = Field(..., description="Non-player characters")
+    
+    # Scenes
+    scenes: List[Scene] = Field(..., description="All story scenes")
+    total_scenes: int = Field(..., description="Total number of scenes")
+    
+    # Metadata
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Story metadata")
 

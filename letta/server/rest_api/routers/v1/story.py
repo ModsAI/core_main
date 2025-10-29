@@ -17,6 +17,8 @@ from letta.schemas.story import (
     SessionResume,
     SessionRestartResponse,
     SessionStartResponse,
+    SessionStateResponse,
+    StoryDetailResponse,
     StoryDialogueRequest,
     StoryDialogueResponse,
     StoryError,
@@ -562,6 +564,245 @@ async def generate_dialogue(
                     "Ensure agent exists for character",
                     "Try again in a moment",
                 ]
+            }
+        )
+
+
+# ============================================================
+# GET Endpoints for Unity Integration (Kon's Requirements)
+# ============================================================
+
+
+@router.get("/{story_id}", response_model=StoryDetailResponse)
+async def get_story_details(
+    story_id: str,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Get full story structure for caching.
+    
+    **Purpose:**
+    This endpoint provides the complete story structure (all scenes, characters,
+    dialogue beats, and instructions) so Kon's Unity server can cache this data
+    locally and avoid repeated queries.
+    
+    **Use Case:**
+    - When Kon's server first loads a story
+    - When Unity client needs story metadata
+    - For displaying story overview/map
+    
+    **Example Request:**
+    ```
+    GET /api/v1/story/story-1001
+    ```
+    
+    **Example Response:**
+    ```json
+    {
+        "story_id": "story-1001",
+        "title": "The Price of Survival",
+        "description": "A survival horror story...",
+        "characters": [...],
+        "player_character": {...},
+        "npcs": [...],
+        "scenes": [
+            {
+                "scene_id": "scene-1",
+                "scene_number": 1,
+                "title": "The Nightmare Begins",
+                "location": "Abandoned Factory",
+                "dialogue_beats": [...]
+            }
+        ],
+        "total_scenes": 5,
+        "metadata": {}
+    }
+    ```
+    
+    **Returns:**
+    - Full story structure
+    - All characters (player + NPCs)
+    - All scenes with dialogue beats
+    - Story metadata
+    
+    **Errors:**
+    - 404: Story not found
+    """
+    from letta.schemas.story import StoryDetailResponse
+    
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"📖 Story details request: {story_id} (user: {actor.id})")
+    
+    try:
+        session_manager = SessionManager()
+        response = await session_manager.get_story_details(story_id, actor)
+        
+        logger.info(f"✅ Story details retrieved: {story_id}")
+        return response
+    
+    except ValueError as e:
+        logger.error(f"❌ Story not found: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "STORY_NOT_FOUND",
+                "message": str(e),
+                "suggestions": [
+                    f"Verify story ID '{story_id}' exists",
+                    "Check if you have permission to access this story",
+                    "Upload the story first with POST /api/v1/story/upload",
+                ]
+            }
+        )
+    
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ Error retrieving story: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "STORY_RETRIEVAL_FAILED",
+                "message": f"Failed to retrieve story: {error_msg}",
+            }
+        )
+
+
+@router.get("/sessions/{session_id}/state", response_model=SessionStateResponse)
+async def get_session_state(
+    session_id: str,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Get comprehensive session state for Unity.
+    
+    **Purpose:**
+    This is the MAIN endpoint that Kon's server will call to get everything Unity needs:
+    - Current scene/setting
+    - Available characters
+    - Next instruction/beat
+    - Story progress
+    
+    **Use Case:**
+    - When Unity loads a session
+    - When checking what instruction comes next
+    - For displaying progress UI
+    - For determining which characters are available
+    
+    **Example Request:**
+    ```
+    GET /api/v1/story/sessions/session-abc-123/state
+    ```
+    
+    **Example Response:**
+    ```json
+    {
+        "story_id": "story-1001",
+        "story_title": "The Price of Survival",
+        "session_id": "session-abc-123",
+        "session_status": "active",
+        "current_setting": {
+            "scene_id": "scene-1",
+            "scene_number": 1,
+            "scene_title": "The Nightmare Begins",
+            "location": "Abandoned Factory - Main Hall",
+            "total_scenes": 5
+        },
+        "player_character": "Woo",
+        "available_npcs": [
+            {
+                "character_id": "char-002",
+                "name": "Ah-rin",
+                "age": 14,
+                "sex": "female",
+                "model": "young_girl_casual",
+                "role": "ah-rin"
+            },
+            {
+                "character_id": "char-003",
+                "name": "Ji-woo",
+                "age": 17,
+                "sex": "male",
+                "model": "teen_boy_hoodie",
+                "role": "ji-woo"
+            }
+        ],
+        "next_instruction": {
+            "type": "dialogue",
+            "beat_id": "scene-1-beat-2",
+            "beat_number": 2,
+            "character": "Ah-rin",
+            "topic": "escape plans",
+            "script_text": "We need to find a way out of this nightmare",
+            "is_completed": false,
+            "instruction_details": {
+                "general_guidance": "Guide conversation toward: escape plans",
+                "emotional_tone": "natural",
+                "keywords": ["escape", "plans", "nightmare", "need", "find"]
+            }
+        },
+        "progress": {
+            "scene_progress": 0.33,
+            "beats_completed": ["scene-1-beat-1"],
+            "beats_remaining": ["scene-1-beat-2", "scene-1-beat-3"],
+            "total_beats_in_scene": 3,
+            "scene_complete": false
+        },
+        "metadata": {
+            "last_updated": "2025-10-28T10:30:00Z",
+            "total_interactions": 1,
+            "current_instruction_index": 1
+        }
+    }
+    ```
+    
+    **Returns:**
+    - Current scene info (setting, location, title)
+    - Player character name
+    - Available NPCs for interaction
+    - Next instruction/beat to address
+    - Progress through current scene
+    - Session metadata
+    
+    **Errors:**
+    - 404: Session not found
+    """
+    from letta.schemas.story import SessionStateResponse
+    
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"🎮 Session state request: {session_id} (user: {actor.id})")
+    
+    try:
+        session_manager = SessionManager()
+        response = await session_manager.get_session_state(session_id, actor)
+        
+        logger.info(f"✅ Session state retrieved: {session_id}")
+        return response
+    
+    except ValueError as e:
+        logger.error(f"❌ Session not found: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "SESSION_NOT_FOUND",
+                "message": str(e),
+                "suggestions": [
+                    f"Verify session ID '{session_id}' exists",
+                    "Check if session is still active",
+                    "Start a new session with POST /api/v1/story/sessions/start",
+                ]
+            }
+        )
+    
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ Error retrieving session state: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "SESSION_STATE_RETRIEVAL_FAILED",
+                "message": f"Failed to retrieve session state: {error_msg}",
             }
         )
 

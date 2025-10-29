@@ -522,20 +522,43 @@ class DialogueManager:
         """
         Check if scene is complete.
         
+        Q4: Now respects beat priority!
+        - Only "required" beats block scene completion
+        - "optional" beats don't prevent scene transition
+        - Progress is calculated over ALL beats (required + optional)
+        
         Returns:
             (is_complete, progress_fraction)
         """
         if not scene.dialogue_beats:
             return True, 1.0
         
+        # Q4: Separate required and optional beats
+        required_beats = [
+            beat for beat in scene.dialogue_beats
+            if beat.get("priority", "required") == "required"
+        ]
+        optional_beats = [
+            beat for beat in scene.dialogue_beats
+            if beat.get("priority", "required") == "optional"
+        ]
+        
+        # Count completed beats (both required and optional)
         total_beats = len(scene.dialogue_beats)
         completed_count = sum(
             1 for beat in scene.dialogue_beats
             if beat.get("beat_id") in completed_beats
         )
         
-        progress = completed_count / total_beats
-        is_complete = completed_count >= total_beats
+        # Scene is complete if all REQUIRED beats are done
+        required_completed = sum(
+            1 for beat in required_beats
+            if beat.get("beat_id") in completed_beats
+        )
+        is_complete = required_completed >= len(required_beats) if required_beats else True
+        
+        # Progress is over ALL beats (gives optional beats value)
+        progress = completed_count / total_beats if total_beats > 0 else 1.0
         
         return is_complete, progress
 

@@ -783,4 +783,327 @@ class SessionManager:
             updated_at=session_orm.updated_at,
             completed_at=session_orm.completed_at,
         )
+    
+    # ============================================================
+    # NEW: Kon's Unity Integration - GET Endpoint Helpers
+    # ============================================================
+    
+    def _get_next_instruction(
+        self,
+        story: Story,
+        session_state: SessionState,
+    ) -> Optional[Dict]:
+        """
+        Get the next instruction/beat from the story.
+        
+        Returns the next dialogue beat or instruction that needs to be addressed.
+        This is what Unity needs to display to the player.
+        
+        NOW WITH Q4 SUPPORT:
+        - Checks beat dependencies (requires_beats)
+        - Respects beat priority (required vs optional)
+        - Skips beats with unsatisfied dependencies
+        
+        Args:
+            story: The story object
+            session_state: Current session state
+            
+        Returns:
+            Dictionary with next instruction info, or None if story complete
+        """
+        current_scene_num = session_state.current_scene_number
+        
+        # Check if story is complete
+        if current_scene_num > len(story.scenes):
+            return {
+                "type": "end",
+                "beat_id": None,
+                "beat_number": None,
+                "global_beat_number": None,
+                "character": None,
+                "topic": "Story Complete",
+                "script_text": "The story has ended.",
+                "is_completed": True,
+                "priority": None,
+                "requires_beats": [],
+                "instruction_details": None,
+            }
+        
+        # Get current scene
+        current_scene = story.scenes[current_scene_num - 1]
+        completed_beats = session_state.completed_dialogue_beats
+        
+        # Q4: Find next available beat (considering dependencies)
+        for idx, beat in enumerate(current_scene.dialogue_beats):
+            beat_id = beat.get("beat_id")
+            if beat_id and beat_id not in completed_beats:
+                # Q4: Check if dependencies are satisfied
+                requires_beats = beat.get("requires_beats", [])
+                dependencies_met = all(req_beat in completed_beats for req_beat in requires_beats)
+                
+                if not dependencies_met:
+                    # Dependencies not met - skip this beat for now
+                    priority = beat.get("priority", "required")
+                    logger.debug(
+                        f"  ⏭️ Skipping beat {beat_id} - dependencies not met: {requires_beats} "
+                        f"(priority: {priority})"
+                    )
+                    continue  # Try next beat
+                
+                # Dependencies satisfied! Return this beat
+                character_name = beat.get("character", "Unknown")
+                topic = beat.get("topic", "conversation")
+                script_text = beat.get("script_text", "")
+                global_beat_number = beat.get("global_beat_number")
+                priority = beat.get("priority", "required")
+                
+                # Extract keywords from topic and script
+                keywords = []
+                if topic:
+                    keywords.extend(topic.lower().split()[:3])
+                if script_text:
+                    # Simple keyword extraction (first 3 important words)
+                    words = [w.strip('.,!?') for w in script_text.lower().split() if len(w) > 4]
+                    keywords.extend(words[:3])
+                
+                return {
+                    "type": "dialogue",
+                    "beat_id": beat_id,
+                    "beat_number": idx + 1,  # Scene-local number
+                    "global_beat_number": global_beat_number,  # Q1: Global counter
+                    "character": character_name,
+                    "topic": topic,
+                    "script_text": script_text,
+                    "is_completed": False,
+                    "priority": priority,  # Q4: required or optional
+                    "requires_beats": requires_beats,  # Q4: Dependencies
+                    "instruction_details": {
+                        "general_guidance": f"Guide conversation toward: {topic}",
+                        "emotional_tone": "natural",
+                        "keywords": list(set(keywords)),  # Remove duplicates
+                    }
+                }
+        
+        # All available beats completed in this scene
+        # (Either truly complete, or remaining beats have unsatisfied dependencies)
+        return {
+            "type": "setting",
+            "beat_id": None,
+            "beat_number": None,
+            "global_beat_number": None,
+            "character": None,
+            "topic": "Scene Transition",
+            "script_text": f"All available dialogue beats completed in {current_scene.title}. Ready to advance to next scene.",
+            "is_completed": True,
+            "priority": None,
+            "requires_beats": [],
+            "instruction_details": {
+                "general_guidance": "Scene complete, ready for next scene",
+                "emotional_tone": "transitional",
+                "keywords": ["complete", "next", "advance"],
+            }
+        }
+    
+    def _get_current_beat_info(
+        self,
+        story: Story,
+        session_state: SessionState,
+    ) -> Dict:
+        """
+        Get information about the current beat progress.
+        
+        Returns details about completed vs remaining beats in current scene.
+        
+        Args:
+            story: The story object
+            session_state: Current session state
+            
+        Returns:
+            Dictionary with beat progress info
+        """
+        current_scene_num = session_state.current_scene_number
+        
+        # Handle story completion
+        if current_scene_num > len(story.scenes):
+            return {
+                "beats_completed": session_state.completed_dialogue_beats,
+                "beats_remaining": [],
+                "total_beats_in_scene": 0,
+                "scene_progress": 1.0,
+                "scene_complete": True,
+            }
+        
+        current_scene = story.scenes[current_scene_num - 1]
+        completed_beats = session_state.completed_dialogue_beats
+        
+        # Get all beat IDs in current scene
+        all_beat_ids = [beat.get("beat_id") for beat in current_scene.dialogue_beats if beat.get("beat_id")]
+        
+        # Separate completed vs remaining
+        completed_in_scene = [bid for bid in all_beat_ids if bid in completed_beats]
+        remaining_in_scene = [bid for bid in all_beat_ids if bid not in completed_beats]
+        
+        total_beats = len(all_beat_ids)
+        completed_count = len(completed_in_scene)
+        
+        # Calculate progress
+        scene_progress = completed_count / total_beats if total_beats > 0 else 0.0
+        scene_complete = len(remaining_in_scene) == 0
+        
+        return {
+            "beats_completed": completed_in_scene,
+            "beats_remaining": remaining_in_scene,
+            "total_beats_in_scene": total_beats,
+            "scene_progress": scene_progress,
+            "scene_complete": scene_complete,
+        }
+    
+    async def get_session_state(
+        self,
+        session_id: str,
+        actor: User,
+    ):
+        """
+        Get comprehensive session state for Unity integration.
+        
+        This is the main method that Kon's server will call to get:
+        - Current scene/setting
+        - Available characters
+        - Next instruction/beat
+        - Progress tracking
+        
+        Args:
+            session_id: Session identifier
+            actor: User making the request
+            
+        Returns:
+            SessionStateResponse with all state info
+        """
+        from letta.schemas.story import (
+            CharacterInfo,
+            CurrentSettingInfo,
+            NextInstructionInfo,
+            ProgressInfo,
+            SessionStateResponse,
+        )
+        
+        # Get session
+        session = await self._get_session_by_id(session_id, actor)
+        if not session:
+            raise ValueError(f"Session '{session_id}' not found")
+        
+        # Get story
+        story = await self.story_manager.get_story(session.story_id, actor)
+        if not story:
+            raise ValueError(f"Story '{session.story_id}' not found")
+        
+        # Get current scene
+        current_scene_num = session.state.current_scene_number
+        if current_scene_num > len(story.scenes):
+            # Story complete
+            current_scene = story.scenes[-1]  # Last scene
+        else:
+            current_scene = story.scenes[current_scene_num - 1]
+        
+        # Build current setting info
+        current_setting = CurrentSettingInfo(
+            scene_id=current_scene.scene_id,
+            scene_number=current_scene.scene_number,
+            scene_title=current_scene.title,
+            location=current_scene.location,
+            total_scenes=len(story.scenes),
+        )
+        
+        # Get player character
+        player_character = next(
+            (char.name for char in story.characters if char.is_main_character),
+            None,
+        )
+        
+        # Build NPC list (exclude main character)
+        available_npcs = [
+            CharacterInfo(
+                character_id=char.character_id or char.name.lower(),
+                name=char.name,
+                age=char.age,
+                sex=char.sex,
+                model=char.model,
+                role=char.name.lower(),  # Use name as role
+            )
+            for char in story.characters
+            if not char.is_main_character
+        ]
+        
+        # Get next instruction
+        next_instr_dict = self._get_next_instruction(story, session.state)
+        next_instruction = NextInstructionInfo(**next_instr_dict) if next_instr_dict else None
+        
+        # Get progress info
+        progress_dict = self._get_current_beat_info(story, session.state)
+        progress = ProgressInfo(**progress_dict)
+        
+        # Build metadata
+        metadata = {
+            "last_updated": session.updated_at.isoformat() if session.updated_at else None,
+            "total_interactions": len(session.state.completed_dialogue_beats),
+            "current_instruction_index": session.state.current_instruction_index,
+        }
+        
+        return SessionStateResponse(
+            story_id=story.story_id,
+            story_title=story.title,
+            session_id=session.session_id,
+            session_status=session.status.value,
+            current_setting=current_setting,
+            player_character=player_character,
+            available_npcs=available_npcs,
+            next_instruction=next_instruction,
+            progress=progress,
+            metadata=metadata,
+        )
+    
+    async def get_story_details(
+        self,
+        story_id: str,
+        actor: User,
+    ):
+        """
+        Get full story structure for caching in Unity.
+        
+        Returns complete story with all scenes, characters, and instructions.
+        This allows Kon's server to cache the story data locally.
+        
+        Args:
+            story_id: Story identifier
+            actor: User making the request
+            
+        Returns:
+            StoryDetailResponse with full story structure
+        """
+        from letta.schemas.story import StoryDetailResponse
+        
+        # Get story
+        story = await self.story_manager.get_story(story_id, actor)
+        if not story:
+            raise ValueError(f"Story '{story_id}' not found")
+        
+        # Separate player character and NPCs
+        player_character = next(
+            (char for char in story.characters if char.is_main_character),
+            None,
+        )
+        
+        npcs = [char for char in story.characters if not char.is_main_character]
+        
+        return StoryDetailResponse(
+            story_id=story.story_id,
+            title=story.title,
+            description=story.description,
+            characters=story.characters,
+            player_character=player_character,
+            npcs=npcs,
+            scenes=story.scenes,
+            total_scenes=len(story.scenes),
+            metadata=story.metadata,
+        )
 

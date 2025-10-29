@@ -272,6 +272,7 @@ class StoryManager:
         scenes = []
         current_scene = None
         scene_number = 0
+        global_beat_number = 0  # Q1: Track global beat counter across all scenes
         
         for idx, instruction in enumerate(instructions):
             if instruction.type == "setting":
@@ -316,21 +317,43 @@ class StoryManager:
                     
                     # Track dialogue beats
                     if instruction.type == "dialogue":
-                        beat_id = f"{current_scene.scene_id}-beat-{len(current_scene.dialogue_beats) + 1}"
+                        # Q1: Increment global beat counter
+                        global_beat_number += 1
+                        
+                        # Scene-local beat number
+                        scene_beat_number = len(current_scene.dialogue_beats) + 1
+                        beat_id = f"{current_scene.scene_id}-beat-{scene_beat_number}"
+                        
+                        # Q2: Use manual topic if provided, otherwise extract from text
+                        topic = instruction.topic if instruction.topic else self._extract_topic(instruction.text or "")
+                        
+                        # Q4: Get priority and dependencies
+                        priority = instruction.priority or "required"  # Default to required
+                        requires_beats = instruction.requires_beats or []  # Default to no dependencies
+                        
                         dialogue_beat = {
                             "beat_id": beat_id,
+                            "beat_number": scene_beat_number,  # Local to scene
+                            "global_beat_number": global_beat_number,  # Q1: Global counter
                             "character": instruction.character,
                             "script_text": instruction.text,
-                            "topic": self._extract_topic(instruction.text or ""),
+                            "topic": topic,  # Q2: Manual or extracted
+                            "priority": priority,  # Q4: required or optional
+                            "requires_beats": requires_beats,  # Q4: Dependencies
                             "is_completed": False,
                         }
                         current_scene.dialogue_beats.append(dialogue_beat)
+                        
+                        logger.debug(
+                            f"    💬 Beat {beat_id} (global #{global_beat_number}): "
+                            f"{instruction.character} - {topic[:30]}... [{priority}]"
+                        )
         
         # Add last scene if exists
         if current_scene and current_scene not in scenes:
             scenes.append(current_scene)
         
-        logger.debug(f"✅ Parsed {len(scenes)} scenes")
+        logger.debug(f"✅ Parsed {len(scenes)} scenes with {global_beat_number} total beats")
         return scenes
 
     def _extract_topic(self, text: str) -> str:
