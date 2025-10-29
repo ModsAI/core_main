@@ -1169,6 +1169,7 @@ class SessionManager:
             available_npcs=available_npcs,
             next_instruction=next_instruction,
             progress=progress,
+            state=session.state,  # Q7 FIX: Include raw state for completion tracking
             metadata=metadata,
         )
     

@@ -351,6 +351,9 @@ class SessionStateResponse(BaseModel):
     # Progress
     progress: ProgressInfo = Field(..., description="Story progress")
     
+    # Session State (Q7 FIX: Add raw state for completion tracking)
+    state: SessionState = Field(..., description="Raw session state with completion lists")
+    
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional session metadata")
 
