@@ -831,58 +831,160 @@ class SessionManager:
         
         # Get current scene
         current_scene = story.scenes[current_scene_num - 1]
-        completed_beats = session_state.completed_dialogue_beats
         
-        # Q4: Find next available beat (considering dependencies)
-        for idx, beat in enumerate(current_scene.dialogue_beats):
+        # Q5: Collect all beat types with their completion status
+        all_beats = []
+        
+        # Add dialogue beats
+        for beat in current_scene.dialogue_beats:
+            all_beats.append({
+                **beat,
+                "beat_type": "dialogue",
+                "completed": beat.get("beat_id") in session_state.completed_dialogue_beats
+            })
+        
+        # Q5: Add narration beats
+        for beat in current_scene.narration_beats:
+            all_beats.append({
+                **beat,
+                "beat_type": "narration",
+                "completed": beat.get("beat_id") in session_state.completed_narration_beats
+            })
+        
+        # Q5: Add action beats
+        for beat in current_scene.action_beats:
+            all_beats.append({
+                **beat,
+                "beat_type": "action",
+                "completed": beat.get("beat_id") in session_state.completed_action_beats
+            })
+        
+        # Sort by global_beat_number to maintain story order
+        all_beats.sort(key=lambda b: b.get("global_beat_number", 999))
+        
+        logger.debug(f"  📋 Scene {current_scene_num} has {len(all_beats)} total beats (D:{len(current_scene.dialogue_beats)}, N:{len(current_scene.narration_beats)}, A:{len(current_scene.action_beats)})")
+        
+        # Q4 & Q5: Find next available beat (considering dependencies and completion)
+        for idx, beat in enumerate(all_beats):
             beat_id = beat.get("beat_id")
-            if beat_id and beat_id not in completed_beats:
+            beat_type = beat.get("beat_type")
+            
+            if beat_id and not beat.get("completed"):
                 # Q4: Check if dependencies are satisfied
                 requires_beats = beat.get("requires_beats", [])
-                dependencies_met = all(req_beat in completed_beats for req_beat in requires_beats)
+                all_completed = (
+                    session_state.completed_dialogue_beats +
+                    session_state.completed_narration_beats +
+                    session_state.completed_action_beats
+                )
+                dependencies_met = all(req_beat in all_completed for req_beat in requires_beats)
                 
                 if not dependencies_met:
                     # Dependencies not met - skip this beat for now
                     priority = beat.get("priority", "required")
                     logger.debug(
-                        f"  ⏭️ Skipping beat {beat_id} - dependencies not met: {requires_beats} "
+                        f"  ⏭️ Skipping {beat_type} {beat_id} - dependencies not met: {requires_beats} "
                         f"(priority: {priority})"
                     )
                     continue  # Try next beat
                 
                 # Dependencies satisfied! Return this beat
-                character_name = beat.get("character", "Unknown")
-                topic = beat.get("topic", "conversation")
-                script_text = beat.get("script_text", "")
                 global_beat_number = beat.get("global_beat_number")
                 priority = beat.get("priority", "required")
                 
-                # Extract keywords from topic and script
-                keywords = []
-                if topic:
-                    keywords.extend(topic.lower().split()[:3])
-                if script_text:
-                    # Simple keyword extraction (first 3 important words)
-                    words = [w.strip('.,!?') for w in script_text.lower().split() if len(w) > 4]
-                    keywords.extend(words[:3])
-                
-                return {
-                    "type": "dialogue",
-                    "beat_id": beat_id,
-                    "beat_number": idx + 1,  # Scene-local number
-                    "global_beat_number": global_beat_number,  # Q1: Global counter
-                    "character": character_name,
-                    "topic": topic,
-                    "script_text": script_text,
-                    "is_completed": False,
-                    "priority": priority,  # Q4: required or optional
-                    "requires_beats": requires_beats,  # Q4: Dependencies
-                    "instruction_details": {
-                        "general_guidance": f"Guide conversation toward: {topic}",
-                        "emotional_tone": "natural",
-                        "keywords": list(set(keywords)),  # Remove duplicates
+                # Build response based on beat type
+                if beat_type == "dialogue":
+                    character_name = beat.get("character", "Unknown")
+                    topic = beat.get("topic", "conversation")
+                    script_text = beat.get("script_text", "")
+                    
+                    # Extract keywords from topic and script
+                    keywords = []
+                    if topic:
+                        keywords.extend(topic.lower().split()[:3])
+                    if script_text:
+                        words = [w.strip('.,!?') for w in script_text.lower().split() if len(w) > 4]
+                        keywords.extend(words[:3])
+                    
+                    return {
+                        "type": "dialogue",
+                        "beat_id": beat_id,
+                        "beat_number": beat.get("beat_number"),
+                        "global_beat_number": global_beat_number,
+                        "character": character_name,
+                        "topic": topic,
+                        "script_text": script_text,
+                        "is_completed": False,
+                        "priority": priority,
+                        "requires_beats": requires_beats,
+                        "instruction_details": {
+                            "general_guidance": f"Guide conversation toward: {topic}",
+                            "emotional_tone": beat.get("emotion"),
+                            "keywords": list(set(keywords)),
+                        },
+                        # Q9: Metadata enrichment
+                        "emotion": beat.get("emotion"),
+                        "animation": beat.get("animation"),
+                        "camera_angle": beat.get("camera_angle"),
+                        "timing_hint": beat.get("timing_hint"),
+                        "sfx": beat.get("sfx"),
+                        "music_cue": beat.get("music_cue"),
                     }
-                }
+                
+                elif beat_type == "narration":
+                    text = beat.get("text", "")
+                    return {
+                        "type": "narration",
+                        "beat_id": beat_id,
+                        "beat_number": beat.get("beat_number"),
+                        "global_beat_number": global_beat_number,
+                        "character": None,
+                        "topic": "Narration",
+                        "script_text": text,
+                        "is_completed": False,
+                        "priority": priority,
+                        "requires_beats": requires_beats,
+                        "instruction_details": {
+                            "general_guidance": "Display narration to player",
+                            "emotional_tone": None,
+                            "keywords": [],
+                        },
+                        # Q9: Metadata enrichment
+                        "emotion": None,
+                        "animation": None,
+                        "camera_angle": beat.get("camera_angle"),
+                        "timing_hint": beat.get("timing_hint"),
+                        "sfx": beat.get("sfx"),
+                        "music_cue": beat.get("music_cue"),
+                    }
+                
+                elif beat_type == "action":
+                    character_name = beat.get("character", "Unknown")
+                    action_text = beat.get("action_text", "")
+                    return {
+                        "type": "action",
+                        "beat_id": beat_id,
+                        "beat_number": beat.get("beat_number"),
+                        "global_beat_number": global_beat_number,
+                        "character": character_name,
+                        "topic": "Action",
+                        "script_text": action_text,
+                        "is_completed": False,
+                        "priority": priority,
+                        "requires_beats": requires_beats,
+                        "instruction_details": {
+                            "general_guidance": f"Display action: {action_text}",
+                            "emotional_tone": None,
+                            "keywords": [],
+                        },
+                        # Q9: Metadata enrichment
+                        "emotion": None,
+                        "animation": beat.get("animation"),
+                        "camera_angle": beat.get("camera_angle"),
+                        "timing_hint": beat.get("timing_hint"),
+                        "sfx": beat.get("sfx"),
+                        "music_cue": None,
+                    }
         
         # All available beats completed in this scene
         # (Either truly complete, or remaining beats have unsatisfied dependencies)
