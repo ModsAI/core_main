@@ -209,6 +209,46 @@ class StoryManager:
             logger.error(f"❌ Failed to get story {story_id}: {e}", exc_info=True)
             return None
 
+    async def delete_story(
+        self,
+        story_id: str,
+        actor: User,
+    ) -> bool:
+        """
+        Delete a story by ID.
+
+        Args:
+            story_id: Story identifier
+            actor: User requesting the deletion
+
+        Returns:
+            True if deleted, False if not found or error
+        """
+        logger.info(f"🗑️ Deleting story: {story_id}")
+
+        try:
+            from sqlalchemy import delete
+
+            async with db_registry.async_session() as session:
+                async with session.begin():
+                    # Delete story
+                    delete_stmt = delete(StoryORM).where(
+                        StoryORM.story_id == story_id,
+                        StoryORM.organization_id == actor.organization_id,
+                    )
+                    result = await session.execute(delete_stmt)
+
+                    if result.rowcount > 0:
+                        logger.info(f"✅ Story deleted: {story_id}")
+                        return True
+                    else:
+                        logger.warning(f"❌ Story not found for deletion: {story_id}")
+                        return False
+
+        except Exception as e:
+            logger.error(f"❌ Failed to delete story {story_id}: {e}", exc_info=True)
+            return False
+
     def _process_characters(self, characters: List[StoryCharacter]) -> List[StoryCharacter]:
         """
         Process characters: generate character_id, validate.

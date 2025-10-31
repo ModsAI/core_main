@@ -48,11 +48,12 @@ router = APIRouter(prefix="/story", tags=["story"])
 @router.post("/upload", response_model=StoryUploadResponse)
 async def upload_story(
     story: StoryUpload,
+    overwrite: bool = False,
     server: "SyncServer" = Depends(get_letta_server),
     actor_id: str | None = Header(None, alias="user_id"),
 ):
     """
-    Upload a new story.
+    Upload a new story or update an existing one.
 
     Converts TypeScript story JSON to internal format and stores in database.
 
@@ -62,6 +63,7 @@ async def upload_story(
     3. Parses instructions into scenes
     4. Extracts dialogue beats
     5. Stores in database
+    6. If `overwrite=true`, deletes existing story first
 
     **Example Request:**
     ```json
@@ -112,10 +114,19 @@ async def upload_story(
     - 500: Database error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
-    logger.info(f"📤 Story upload request: {story.title} (user: {actor.id})")
+    logger.info(f"📤 Story upload request: {story.title} (user: {actor.id}, overwrite={overwrite})")
 
     try:
         story_manager = StoryManager()
+        
+        # If overwrite=true, delete existing story first
+        if overwrite:
+            story_id = f"story-{story.id}"
+            existing = await story_manager.get_story(story_id, actor)
+            if existing:
+                logger.info(f"  🔄 Overwrite mode: Deleting existing story {story_id}")
+                await story_manager.delete_story(story_id, actor)
+        
         response = await story_manager.upload_story(story, actor)
 
         logger.info(f"✅ Story uploaded: {response.story_id}")
