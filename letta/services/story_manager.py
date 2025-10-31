@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 class StoryManager:
     """
     Manages story operations: upload, parse, retrieve, delete.
-
+    
     Key responsibilities:
     1. Parse TypeScript story JSON
     2. Extract scenes from instructions
@@ -44,43 +44,43 @@ class StoryManager:
     ) -> StoryUploadResponse:
         """
         Upload and process a story.
-
+        
         Process:
         1. Validate story structure
         2. Generate character IDs
         3. Parse instructions into scenes
         4. Extract dialogue beats
         5. Store in database
-
+        
         Args:
             story_upload: Story data from TypeScript
             actor: User uploading the story
-
+            
         Returns:
             Upload response with story details
-
+            
         Raises:
             ValueError: Invalid story structure
             IntegrityError: Story ID already exists
             Exception: Other database/processing errors
         """
         logger.info(f"📤 Uploading story: {story_upload.title} (ID: {story_upload.id})")
-
+        
         try:
             # Step 1: Generate story_id
             story_id = f"story-{story_upload.id}"
-
+            
             # Step 2: Process characters (add character_id)
             characters = self._process_characters(story_upload.characters)
             logger.debug(f"✅ Processed {len(characters)} characters")
-
+            
             # Step 3: Parse instructions into scenes
             scenes = self._parse_scenes(story_upload.instructions, characters)
             logger.debug(f"✅ Parsed {len(scenes)} scenes")
-
+            
             # Step 4: Validate scene structure
             self._validate_scenes(scenes)
-
+            
             # Step 5: Store in database
             async with db_registry.async_session() as session:
                 async with session.begin():
@@ -88,16 +88,16 @@ class StoryManager:
                     existing_check = select(StoryORM).where(StoryORM.story_id == story_id)
                     result = await session.execute(existing_check)
                     existing_story = result.scalar_one_or_none()
-
+                    
                     if existing_story:
                         logger.error(f"❌ Story ID '{story_id}' already exists")
                         raise IntegrityError(f"Story ID '{story_id}' already exists", None, None)
-
+                    
                     # Create ORM object
                     # Store processed story JSON with character_id populated
                     processed_story_json = story_upload.dict()
                     processed_story_json["characters"] = [char.dict() for char in characters]
-
+                    
                     # DEBUG: Check scenes before saving
                     scenes_dicts = [scene.dict() for scene in scenes]
                     for i, scene_dict in enumerate(scenes_dicts):
@@ -120,13 +120,13 @@ class StoryManager:
                         },
                         organization_id=actor.organization_id,
                     )
-
+                    
                     session.add(story_orm)
                     await session.flush()
                     await session.refresh(story_orm)
-
+                
                 logger.info(f"✅ Successfully uploaded story: {story_upload.title}")
-
+                
                 return StoryUploadResponse(
                     success=True,
                     story_id=story_id,
@@ -141,19 +141,19 @@ class StoryManager:
                         f"Start a session with: POST /api/v1/story/sessions/start",
                     ],
                 )
-
+        
         except IntegrityError as e:
             logger.error(f"❌ Story upload failed (duplicate): {e}")
             raise ValueError(f"Story with ID {story_upload.id} already exists") from e
-
+        
         except ValueError as e:
             logger.error(f"❌ Story upload failed (validation): {e}")
             raise
-
+        
         except SQLAlchemyError as e:
             logger.error(f"❌ Story upload failed (database): {e}", exc_info=True)
             raise Exception(f"Database error during story upload: {str(e)}") from e
-
+        
         except Exception as e:
             logger.error(f"❌ Story upload failed (unexpected): {e}", exc_info=True)
             raise Exception(f"Failed to upload story: {str(e)}") from e
@@ -165,16 +165,16 @@ class StoryManager:
     ) -> Optional[Story]:
         """
         Retrieve a story by ID.
-
+        
         Args:
             story_id: Story identifier
             actor: User requesting the story
-
+            
         Returns:
             Story object or None if not found
         """
         logger.debug(f"🔍 Getting story: {story_id}")
-
+        
         try:
             async with db_registry.async_session() as session:
                 async with session.begin():
@@ -184,15 +184,15 @@ class StoryManager:
                     )
                     result = await session.execute(query)
                     story_orm = result.scalar_one_or_none()
-
+                    
                     if not story_orm:
                         logger.warning(f"❌ Story not found: {story_id}")
                         return None
-
+                    
                     # Convert to schema
                     scenes = [Scene(**scene) for scene in story_orm.scenes_json["scenes"]]
                     characters = [StoryCharacter(**char) for char in story_orm.story_json["characters"]]
-
+                    
                     story = Story(
                         story_id=story_orm.story_id,
                         title=story_orm.title,
@@ -201,10 +201,10 @@ class StoryManager:
                         scenes=scenes,
                         metadata=story_orm.story_metadata or {},
                     )
-
+                    
                     logger.debug(f"✅ Found story: {story.title}")
                     return story
-
+        
         except Exception as e:
             logger.error(f"❌ Failed to get story {story_id}: {e}", exc_info=True)
             return None
@@ -252,25 +252,25 @@ class StoryManager:
     def _process_characters(self, characters: List[StoryCharacter]) -> List[StoryCharacter]:
         """
         Process characters: generate character_id, validate.
-
+        
         Args:
             characters: Raw characters from upload
-
+            
         Returns:
             Processed characters with IDs
         """
         processed = []
         seen_ids = set()
-
+        
         for char in characters:
             # Generate character_id from name (lowercase, replace spaces with underscores)
             char_id = char.name.lower().replace(" ", "_").replace("'", "")
-
+            
             # Ensure uniqueness
             if char_id in seen_ids:
                 char_id = f"{char_id}_{len(seen_ids)}"
             seen_ids.add(char_id)
-
+            
             # Create new character with ID
             processed_char = StoryCharacter(
                 name=char.name,
@@ -281,9 +281,9 @@ class StoryManager:
                 character_id=char_id,
             )
             processed.append(processed_char)
-
+            
             logger.debug(f"  📝 Character: {char.name} → {char_id}")
-
+        
         return processed
 
     def _parse_scenes(
@@ -293,33 +293,33 @@ class StoryManager:
     ) -> List[Scene]:
         """
         Parse instructions into scenes.
-
+        
         A scene is a group of instructions between 'setting' instructions.
-
+        
         Args:
             instructions: Story instructions
             characters: Processed characters
-
+            
         Returns:
             List of scenes
         """
         logger.debug("🎬 Parsing scenes from instructions...")
-
+        
         scenes = []
         current_scene = None
         scene_number = 0
         global_beat_number = 0  # Q1: Track global beat counter across all scenes
-
+        
         for idx, instruction in enumerate(instructions):
             if instruction.type == "setting":
                 # Save previous scene if exists
                 if current_scene:
                     scenes.append(current_scene)
-
+                
                 # Start new scene
                 scene_number += 1
                 scene_id = f"scene-{scene_number}"
-
+                
                 current_scene = Scene(
                     scene_id=scene_id,
                     scene_number=scene_number,
@@ -329,20 +329,20 @@ class StoryManager:
                     characters=[],
                     dialogue_beats=[],
                 )
-
+                
                 logger.debug(f"  🎬 Scene {scene_number}: {current_scene.title}")
-
+            
             elif instruction.type == "end":
                 # End of story
                 if current_scene:
                     scenes.append(current_scene)
                 break
-
+            
             else:
                 # Add instruction to current scene
                 if current_scene:
                     current_scene.instructions.append(instruction)
-
+                    
                     # Track characters in this scene
                     if instruction.character and instruction.character not in current_scene.characters:
                         # Find character_id from name
@@ -350,23 +350,23 @@ class StoryManager:
                             if char.name == instruction.character:
                                 current_scene.characters.append(char.character_id)
                                 break
-
+                    
                     # Track dialogue beats
                     if instruction.type == "dialogue":
                         # Q1: Increment global beat counter
                         global_beat_number += 1
-
+                        
                         # Scene-local beat number
                         scene_beat_number = len(current_scene.dialogue_beats) + 1
                         beat_id = f"{current_scene.scene_id}-beat-{scene_beat_number}"
-
+                        
                         # Q2: Use manual topic if provided, otherwise extract from text
                         topic = instruction.topic if instruction.topic else self._extract_topic(instruction.text or "")
-
+                        
                         # Q4: Get priority and dependencies
                         priority = instruction.priority or "required"  # Default to required
                         requires_beats = instruction.requires_beats or []  # Default to no dependencies
-
+                        
                         dialogue_beat = {
                             "beat_id": beat_id,
                             "beat_number": scene_beat_number,  # Local to scene
@@ -388,22 +388,22 @@ class StoryManager:
                             "choices": instruction.choices,
                         }
                         current_scene.dialogue_beats.append(dialogue_beat)
-
+                        
                         logger.debug(
                             f"    💬 Beat {beat_id} (global #{global_beat_number}): "
                             f"{instruction.character} - {topic[:30]}... [{priority}]"
                             + (f" emotion={instruction.emotion}" if instruction.emotion else "")
                         )
-
+                    
                     # Q5: Track narration beats (checkpoints)
                     elif instruction.type == "narration":
                         global_beat_number += 1
                         narration_number = len(current_scene.narration_beats) + 1
                         narration_id = f"{current_scene.scene_id}-narration-{narration_number}"
-
+                        
                         priority = instruction.priority or "required"
                         requires_beats = instruction.requires_beats or []
-
+                        
                         narration_beat = {
                             "beat_id": narration_id,
                             "beat_number": narration_number,
@@ -423,22 +423,22 @@ class StoryManager:
                         logger.info(f"    DEBUG: Created narration_beat with choices={narration_beat.get('choices')}")
                         current_scene.narration_beats.append(narration_beat)
                         logger.info(f"    DEBUG: Scene now has {len(current_scene.narration_beats)} narration beats")
-
+                        
                         logger.info(
                             f"    📖 Narration {narration_id} (global #{global_beat_number}): "
                             f"{instruction.text[:30] if instruction.text else 'N/A'}... [{priority}] "
                             f"CHOICES={instruction.choices}"
                         )
-
+                    
                     # Q5: Track action beats (checkpoints)
                     elif instruction.type == "action":
                         global_beat_number += 1
                         action_number = len(current_scene.action_beats) + 1
                         action_id = f"{current_scene.scene_id}-action-{action_number}"
-
+                        
                         priority = instruction.priority or "required"
                         requires_beats = instruction.requires_beats or []
-
+                        
                         action_beat = {
                             "beat_id": action_id,
                             "beat_number": action_number,
@@ -457,21 +457,21 @@ class StoryManager:
                             "choices": instruction.choices,
                         }
                         current_scene.action_beats.append(action_beat)
-
+                        
                         logger.debug(
                             f"    🎬 Action {action_id} (global #{global_beat_number}): "
                             f"{instruction.character or 'N/A'} - {(instruction.action or instruction.text or '')[:30]}... [{priority}]"
                         )
-
+        
         # Add last scene if exists
         if current_scene and current_scene not in scenes:
             scenes.append(current_scene)
-
+        
         # Count total beats by type (Q5)
         total_dialogue = sum(len(scene.dialogue_beats) for scene in scenes)
         total_narration = sum(len(scene.narration_beats) for scene in scenes)
         total_action = sum(len(scene.action_beats) for scene in scenes)
-
+        
         logger.debug(
             f"✅ Parsed {len(scenes)} scenes with {global_beat_number} total checkpoints "
             f"(Dialogue: {total_dialogue}, Narration: {total_narration}, Actions: {total_action})"
@@ -481,10 +481,10 @@ class StoryManager:
     def _extract_topic(self, text: str) -> str:
         """
         Extract topic from dialogue text (simple keyword extraction).
-
+        
         Args:
             text: Dialogue text
-
+            
         Returns:
             Topic summary
         """
@@ -498,24 +498,24 @@ class StoryManager:
     def _validate_scenes(self, scenes: List[Scene]) -> None:
         """
         Validate scene structure.
-
+        
         Args:
             scenes: Parsed scenes
-
+            
         Raises:
             ValueError: Invalid scene structure
         """
         if not scenes:
             raise ValueError("Story must have at least one scene")
-
+        
         for scene in scenes:
             if not scene.title:
                 raise ValueError(f"Scene {scene.scene_number} missing title")
-
+            
             if not scene.location:
                 raise ValueError(f"Scene {scene.scene_number} missing location")
-
+            
             if not scene.instructions:
                 logger.warning(f"⚠️ Scene {scene.scene_number} has no instructions")
-
+        
         logger.debug(f"✅ Scene validation passed ({len(scenes)} scenes)")

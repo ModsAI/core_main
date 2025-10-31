@@ -11,6 +11,7 @@ from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
@@ -283,6 +284,68 @@ def create_application() -> "FastAPI":
                     "message": "Unable to access the required AI model. Please check your Bedrock permissions or contact support.",
                     "detail": {str(exc)},
                 }
+            },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """
+        Custom handler for Pydantic validation errors (422).
+        Returns detailed, actionable error messages for missing/invalid fields.
+        """
+        errors = exc.errors()
+        logger.error(f"Validation error: {errors}")
+        
+        # Extract missing fields for character schema specifically
+        missing_fields = []
+        invalid_fields = []
+        
+        for error in errors:
+            loc = error.get("loc", [])
+            msg = error.get("msg", "")
+            error_type = error.get("type", "")
+            
+            # Build human-readable field path
+            field_path = " -> ".join(str(l) for l in loc)
+            
+            if error_type == "missing":
+                missing_fields.append(field_path)
+            else:
+                invalid_fields.append(f"{field_path}: {msg}")
+        
+        # Build detailed error response
+        error_details = []
+        suggestions = []
+        
+        if missing_fields:
+            error_details.append(f"Missing required fields: {', '.join(missing_fields)}")
+            
+            # Check if it's character-related errors
+            if any("characters" in field for field in missing_fields):
+                if any("sex" in field for field in missing_fields):
+                    suggestions.append("Every character MUST have a 'sex' field (male/female)")
+                if any("age" in field for field in missing_fields):
+                    suggestions.append("Every character MUST have an 'age' field (any number)")
+                suggestions.append("Example: {\"name\": \"Hero\", \"sex\": \"male\", \"age\": 20, \"isMainCharacter\": true}")
+        
+        if invalid_fields:
+            error_details.append(f"Invalid fields: {', '.join(invalid_fields)}")
+        
+        if not suggestions:
+            suggestions = [
+                "Check that all required fields are present",
+                "Verify field types match the schema",
+                "Ensure JSON structure is valid",
+            ]
+        
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "VALIDATION_ERROR",
+                "message": "Request validation failed",
+                "details": error_details,
+                "validation_errors": errors,
+                "suggestions": suggestions,
             },
         )
 
