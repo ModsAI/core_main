@@ -873,7 +873,7 @@ async def advance_story(
             )
 
         # Check if story is complete
-        if beat_type == "end" or current_instruction.get("is_completed"):
+        if beat_type == "end":
             logger.info(f"  ✓ Story is complete")
             return JSONResponse(
                 status_code=400,
@@ -883,6 +883,50 @@ async def advance_story(
                     "suggestions": ["Story is complete", "Can restart session with /restart"],
                 },
             )
+        
+        # Check if this is a scene transition (all beats complete in current scene)
+        if beat_type == "setting" and current_instruction.get("is_completed"):
+            # Scene is complete - advance to next scene automatically
+            current_scene = session.state.current_scene_number
+            if current_scene < len(story.scenes):
+                logger.info(f"  🎬 Scene {current_scene} complete - auto-advancing to Scene {current_scene + 1}")
+                session.state.current_scene_number = current_scene + 1
+                session.state.completed_dialogue_beats = []
+                session.state.completed_narration_beats = []
+                session.state.completed_action_beats = []
+                
+                # Save state with new scene
+                state_dict = session.state.model_dump(mode="json") if hasattr(session.state, "model_dump") else session.state.dict()
+                async with db_registry.async_session() as db_session:
+                    async with db_session.begin():
+                        from sqlalchemy import update
+                        from letta.orm.story import StorySession as StorySessionORM
+                        stmt = update(StorySessionORM).where(StorySessionORM.session_id == session_id).values(state=state_dict)
+                        await db_session.execute(stmt)
+                
+                # Get next instruction from new scene
+                next_instruction = session_manager._get_next_instruction(story, session.state)
+                logger.info(f"  ✅ Advanced to Scene {current_scene + 1}")
+                
+                return AdvanceStoryResponse(
+                    success=True,
+                    advanced_from=f"scene-{current_scene}",
+                    beat_type="scene_transition",
+                    message=f"Advanced to Scene {current_scene + 1}",
+                    next_instruction=next_instruction,
+                    session_id=session_id,
+                )
+            else:
+                # Really at the end
+                logger.info(f"  ✓ Story is complete")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "STORY_COMPLETE",
+                        "message": "Story has ended. No more instructions to advance to.",
+                        "suggestions": ["Story is complete", "Can restart session with /restart"],
+                    },
+                )
 
         # Mark beat as completed based on type
         if beat_id:
