@@ -252,6 +252,17 @@ class StoryChoiceResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
 
 
+class AdvanceStoryResponse(BaseModel):
+    """Response after advancing story (tap to continue)"""
+
+    success: bool = Field(..., description="Whether story was advanced")
+    advanced_from: Optional[str] = Field(None, description="Beat ID that was completed")
+    beat_type: str = Field(..., description="Type of beat that was completed (narration, action, setting)")
+    message: str = Field(..., description="Status message")
+    next_instruction: Optional[NextInstructionInfo] = Field(None, description="Next instruction to display")
+    session_id: str = Field(..., description="Session identifier")
+
+
 # ============================================================
 # Error Models
 # ============================================================

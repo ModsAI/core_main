@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from letta.log import get_logger
 from letta.schemas.story import (
+    AdvanceStoryResponse,
     SessionCreate,
     SessionRestartResponse,
     SessionResume,
@@ -710,6 +711,225 @@ async def select_choice(
                 "error": "CHOICE_PROCESSING_FAILED",
                 "message": f"Failed to process choice: {str(e)}",
                 "suggestions": ["Check server logs", "Try again"],
+            },
+        )
+
+
+@router.post("/sessions/{session_id}/advance-story", response_model=AdvanceStoryResponse)
+async def advance_story(
+    session_id: str,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Advance story to next instruction (player "tap to continue").
+
+    **Purpose:**
+    Simple endpoint for when player just wants to continue/advance the story
+    without making a choice or typing dialogue. This is for non-interactive
+    beats like narration, actions, and setting descriptions.
+
+    **Use Cases:**
+    - Narration without choices → Player taps "Continue"
+    - Action beats → Player taps to acknowledge
+    - Setting descriptions → Player taps to proceed
+    - Any non-interactive instruction
+
+    **How It Works:**
+    1. Get current session state
+    2. Get current instruction from `next_instruction`
+    3. Mark current beat as completed
+    4. Return updated state with next instruction
+
+    **Difference from other endpoints:**
+    - `/select-choice`: For when player chooses from options
+    - `/dialogue`: For when player types a message
+    - `/advance-story`: For when player just taps to continue
+    - `/skip-beat`: For QA/admin to force-skip (requires beat_id)
+
+    **Example Request:**
+    ```
+    POST /v1/story/sessions/session-abc-123/advance-story
+    ```
+
+    **Example Response:**
+    ```json
+    {
+        "success": true,
+        "advanced_from": "scene-1-narration-1",
+        "beat_type": "narration",
+        "message": "Advanced from narration beat",
+        "next_instruction": {
+            "type": "dialogue",
+            "character": "Hero",
+            "text": "...",
+            "choices": null
+        },
+        "session_id": "session-abc-123"
+    }
+    ```
+
+    **Returns:**
+    - Success status
+    - Beat ID that was completed
+    - Type of beat (narration/action/setting)
+    - Next instruction to display
+    - Session ID
+
+    **Errors:**
+    - 404: Session not found
+    - 400: Beat has choices (use /select-choice)
+    - 400: Beat is dialogue (use /dialogue)
+    - 400: Story is complete
+    """
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"📍 Advance Story - Session: {session_id}, User: {actor.id}")
+
+    try:
+        session_manager = SessionManager()
+        story_manager = StoryManager()
+
+        # Get session
+        session = await session_manager.get_session_async(session_id, actor.id)
+        if not session:
+            logger.error(f"  ✗ Session not found: {session_id}")
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "SESSION_NOT_FOUND",
+                    "message": f"Session {session_id} not found",
+                    "suggestions": ["Check session ID", "Ensure session was created"],
+                },
+            )
+
+        # Get story
+        story = await story_manager.get_story_async(session.story_id, actor.id)
+        if not story:
+            logger.error(f"  ✗ Story not found: {session.story_id}")
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "STORY_NOT_FOUND",
+                    "message": f"Story {session.story_id} not found",
+                    "suggestions": ["Check story ID", "Ensure story exists"],
+                },
+            )
+
+        # Get current instruction
+        current_instruction = session_manager._get_next_instruction(story, session.state)
+
+        if not current_instruction:
+            logger.warning(f"  ⚠️ No current instruction to advance from")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "NO_INSTRUCTION",
+                    "message": "No current instruction to advance from. Story may be complete.",
+                    "suggestions": ["Check if story has ended", "Use /state to verify current position"],
+                },
+            )
+
+        # Get beat details
+        beat_type = current_instruction.get("type")
+        beat_id = current_instruction.get("beat_id")
+
+        logger.debug(f"  → Current instruction: type={beat_type}, beat_id={beat_id}")
+
+        # Check if this is an interactive beat that needs specific endpoints
+        if beat_type == "dialogue":
+            logger.warning(f"  ⚠️ Cannot advance dialogue beat - use /dialogue endpoint")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "INVALID_BEAT_TYPE",
+                    "message": f"Cannot advance dialogue beat. Use /dialogue endpoint to send player message.",
+                    "beat_type": beat_type,
+                    "suggestions": ["Use POST /dialogue to send player message", "Player needs to interact with character"],
+                },
+            )
+
+        # Check if this instruction has choices
+        if current_instruction.get("choices"):
+            logger.warning(f"  ⚠️ Instruction has choices - should use /select-choice")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "HAS_CHOICES",
+                    "message": "This instruction has choices. Use /select-choice endpoint instead.",
+                    "choices": current_instruction.get("choices"),
+                    "suggestions": ["Use POST /select-choice with choice_id", "Display choice buttons to player"],
+                },
+            )
+
+        # Check if story is complete
+        if beat_type == "end" or current_instruction.get("is_completed"):
+            logger.info(f"  ✓ Story is complete")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "STORY_COMPLETE",
+                    "message": "Story has ended. No more instructions to advance to.",
+                    "suggestions": ["Story is complete", "Can restart session with /restart"],
+                },
+            )
+
+        # Mark beat as completed based on type
+        if beat_id:
+            if beat_type == "narration":
+                if beat_id not in session.state.completed_narration_beats:
+                    session.state.completed_narration_beats.append(beat_id)
+                    logger.info(f"  ✅ Marked narration beat as completed: {beat_id}")
+                else:
+                    logger.debug(f"  ℹ️ Narration beat already completed: {beat_id}")
+            elif beat_type == "action":
+                if beat_id not in session.state.completed_action_beats:
+                    session.state.completed_action_beats.append(beat_id)
+                    logger.info(f"  ✅ Marked action beat as completed: {beat_id}")
+                else:
+                    logger.debug(f"  ℹ️ Action beat already completed: {beat_id}")
+            else:
+                logger.debug(f"  ℹ️ Beat type {beat_type} doesn't need completion tracking")
+
+        # Save session state
+        await session_manager._update_session_state_async(session_id, session.state, actor)
+        logger.debug(f"  → Session state saved")
+
+        # Get next instruction
+        next_instruction = session_manager._get_next_instruction(story, session.state)
+        logger.debug(f"  → Next instruction: {next_instruction.get('type') if next_instruction else 'None'}")
+
+        # Build response
+        response = AdvanceStoryResponse(
+            success=True,
+            advanced_from=beat_id,
+            beat_type=beat_type,
+            message=f"Advanced from {beat_type} beat",
+            next_instruction=next_instruction,
+            session_id=session_id,
+        )
+
+        logger.info(f"  ✅ Story advanced successfully from {beat_type}")
+        return response
+
+    except ValueError as e:
+        logger.error(f"❌ Advance Story FAILED (ValueError): {e}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "ADVANCE_FAILED",
+                "message": str(e),
+                "suggestions": ["Check session ID", "Verify story exists", "Check current instruction"],
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Advance Story FAILED (Exception): {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "ADVANCE_FAILED",
+                "message": f"Failed to advance story: {str(e)}",
+                "suggestions": ["Check server logs", "Try again", "Contact support if issue persists"],
             },
         )
 
