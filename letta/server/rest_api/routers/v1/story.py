@@ -790,7 +790,7 @@ async def advance_story(
         story_manager = StoryManager()
 
         # Get session
-        session = await session_manager.get_session_async(session_id, actor.id)
+        session = await session_manager._get_session_by_id(session_id, actor)
         if not session:
             logger.error(f"  ✗ Session not found: {session_id}")
             return JSONResponse(
@@ -803,7 +803,7 @@ async def advance_story(
             )
 
         # Get story
-        story = await story_manager.get_story_async(session.story_id, actor.id)
+        story = await story_manager.get_story(session.story_id, actor)
         if not story:
             logger.error(f"  ✗ Story not found: {session.story_id}")
             return JSONResponse(
