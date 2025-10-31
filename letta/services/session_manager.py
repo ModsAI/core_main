@@ -937,10 +937,13 @@ class SessionManager:
                         "timing_hint": beat.get("timing_hint"),
                         "sfx": beat.get("sfx"),
                         "music_cue": beat.get("music_cue"),
+                        # Multiple choice support
+                        "choices": beat.get("choices"),
                     }
                 
                 elif beat_type == "narration":
                     text = beat.get("text", "")
+                    logger.info(f"DEBUG _get_next_instruction: beat_type=narration, beat_id={beat_id}, beat keys={list(beat.keys())}, beat['choices']={beat.get('choices')}")
                     return {
                         "type": "narration",
                         "beat_id": beat_id,
@@ -964,6 +967,8 @@ class SessionManager:
                         "timing_hint": beat.get("timing_hint"),
                         "sfx": beat.get("sfx"),
                         "music_cue": beat.get("music_cue"),
+                        # Multiple choice support
+                        "choices": beat.get("choices"),
                     }
                 
                 elif beat_type == "action":
@@ -992,7 +997,9 @@ class SessionManager:
                         "timing_hint": beat.get("timing_hint"),
                         "sfx": beat.get("sfx"),
                         "music_cue": None,
-                }
+                        # Multiple choice support
+                        "choices": beat.get("choices"),
+                    }
         
         # All available beats completed in this scene
         # (Either truly complete, or remaining beats have unsatisfied dependencies)
@@ -1146,6 +1153,8 @@ class SessionManager:
         
         # Get next instruction
         next_instr_dict = self._get_next_instruction(story, session.state)
+        logger.info(f"🔍 DEBUG next_instr_dict keys: {list(next_instr_dict.keys()) if next_instr_dict else None}")
+        logger.info(f"🔍 DEBUG next_instr_dict['choices']: {next_instr_dict.get('choices') if next_instr_dict else None}")
         next_instruction = NextInstructionInfo(**next_instr_dict) if next_instr_dict else None
         
         # Get progress info

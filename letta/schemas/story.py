@@ -76,6 +76,9 @@ class StoryInstruction(BaseModel):
     timing_hint: Optional[float] = Field(None, description="Suggested duration in seconds")
     sfx: Optional[str] = Field(None, description="Sound effect to play")
     music_cue: Optional[str] = Field(None, description="Music cue or track name")
+    
+    # Multiple choice support (for Unity choice selections)
+    choices: Optional[List[Dict[str, Any]]] = Field(None, description="Multiple choice options (e.g., [{'id': 1, 'text': 'Option 1'}])")
 
 
 class StoryUpload(BaseModel):
@@ -187,6 +190,12 @@ class StoryDialogueRequest(BaseModel):
         return v.strip()
 
 
+class StoryChoiceRequest(BaseModel):
+    """Request for handling player choice selection"""
+    choice_id: int = Field(..., description="ID of the choice selected by player")
+    choice_text: Optional[str] = Field(None, description="Text of the choice (for logging)")
+
+
 class DialogueBeatInfo(BaseModel):
     """Information about a dialogue beat"""
     beat_id: str = Field(..., description="Beat identifier")
@@ -212,6 +221,15 @@ class StoryDialogueResponse(BaseModel):
     # Session state
     session_updated: bool = Field(..., description="Was session state updated")
     next_scene_number: Optional[int] = Field(None, description="Next scene number (if transitioning)")
+
+
+class StoryChoiceResponse(BaseModel):
+    """Response after player makes a choice"""
+    success: bool = Field(..., description="Whether choice was processed")
+    choice_id: int = Field(..., description="ID of choice that was selected")
+    message: str = Field(..., description="Status message")
+    session_id: str = Field(..., description="Session identifier")
+    timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
 
 
 # ============================================================
@@ -311,6 +329,9 @@ class NextInstructionInfo(BaseModel):
     timing_hint: Optional[float] = Field(None, description="Suggested duration in seconds (Q9)")
     sfx: Optional[str] = Field(None, description="Sound effect to play (Q9)")
     music_cue: Optional[str] = Field(None, description="Music cue or track name (Q9)")
+    
+    # Multiple choice support
+    choices: Optional[List[Dict[str, Any]]] = Field(None, description="Multiple choice options (if present)")
 
 
 class ProgressInfo(BaseModel):

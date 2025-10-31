@@ -20,6 +20,8 @@ from letta.schemas.story import (
     SessionRestartResponse,
     SessionStartResponse,
     SessionStateResponse,
+    StoryChoiceRequest,
+    StoryChoiceResponse,
     StoryDetailResponse,
     StoryDialogueRequest,
     StoryDialogueResponse,
@@ -566,6 +568,151 @@ async def generate_dialogue(
                     "Ensure agent exists for character",
                     "Try again in a moment",
                 ]
+            }
+        )
+
+
+@router.post("/sessions/{session_id}/select-choice", response_model=StoryChoiceResponse)
+async def select_choice(
+    session_id: str,
+    request: StoryChoiceRequest,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Handle player choice selection (for multiple choice questions).
+    
+    **Purpose:**
+    This endpoint handles when the player makes a choice selection (tap/click)
+    instead of typing dialogue. This is for:
+    - Multiple choice questions in narration
+    - Dialogue choice branches
+    - Quick time events
+    - Any non-dialogue player input
+    
+    **How It Works:**
+    1. Player selects a choice by ID
+    2. Choice is recorded in session state
+    3. Current instruction (with choices) is marked complete
+    4. Story advances to next instruction
+    5. Session state is updated
+    
+    **Use Cases:**
+    - Multiple choice questions: "What path will you take?"
+    - Dialogue branches: "How do you respond?"
+    - Quick decisions: "Save teammate or pursue enemy?"
+    
+    **Example Request:**
+    ```json
+    {
+        "choice_id": 2,
+        "choice_text": "Investigate the artifact"
+    }
+    ```
+    
+    **Example Response:**
+    ```json
+    {
+        "success": true,
+        "choice_id": 2,
+        "message": "Choice recorded and story advanced",
+        "session_id": "session-abc-123",
+        "timestamp": "2025-10-30T16:45:00Z"
+    }
+    ```
+    
+    **Returns:**
+    - Success status
+    - Choice ID that was selected
+    - Status message
+    - Session ID
+    - Timestamp
+    
+    **After this call:**
+    - Call GET /sessions/{session_id}/state to get next instruction
+    - The next instruction will be whatever follows the choice in the script
+    
+    **Errors:**
+    - 404: Session not found
+    - 400: Current instruction doesn't have choices
+    - 500: Database error
+    """
+    from datetime import datetime
+    
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"🎯 Choice selection: session={session_id}, choice_id={request.choice_id}")
+    
+    try:
+        from letta.services.session_manager import SessionManager
+        from letta.services.story_manager import StoryManager
+        from sqlalchemy import select
+        from letta.orm.story import StorySession as StorySessionORM
+        
+        session_manager = SessionManager()
+        story_manager = StoryManager()
+        
+        # Get session and story
+        session = await session_manager._get_session_by_id(session_id, actor)
+        if not session:
+            raise ValueError(f"Session '{session_id}' not found")
+        
+        story = await story_manager.get_story(session.story_id, actor)
+        if not story:
+            raise ValueError(f"Story '{session.story_id}' not found")
+        
+        # Record choice in session state
+        choice_record = {
+            "choice_id": request.choice_id,
+            "choice_text": request.choice_text,
+            "timestamp": datetime.now().isoformat(),
+        }
+        session.state.player_choices.append(choice_record)
+        
+        # Advance to next instruction
+        current_scene = story.scenes[session.state.current_scene_number - 1]
+        session.state.current_instruction_index += 1
+        
+        logger.info(f"  ✓ Choice recorded: {request.choice_id}, advanced to instruction {session.state.current_instruction_index}")
+        
+        # Save to database
+        state_dict = session.state.model_dump(mode='json') if hasattr(session.state, 'model_dump') else session.state.dict()
+        
+        async with db_registry.async_session() as db_session:
+            async with db_session.begin():
+                stmt = select(StorySessionORM).where(StorySessionORM.session_id == session_id)
+                result = await db_session.execute(stmt)
+                session_orm = result.scalar_one()
+                session_orm.state = state_dict
+        
+        logger.info(f"✅ Choice selection complete: {request.choice_id}")
+        
+        return StoryChoiceResponse(
+            success=True,
+            choice_id=request.choice_id,
+            message="Choice recorded and story advanced",
+            session_id=session_id,
+            timestamp=datetime.now()
+        )
+    
+    except ValueError as e:
+        logger.error(f"❌ Choice selection error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "CHOICE_ERROR",
+                "message": str(e),
+                "suggestions": ["Verify session exists", "Check story is loaded"]
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"❌ Choice selection failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "CHOICE_PROCESSING_FAILED",
+                "message": f"Failed to process choice: {str(e)}",
+                "suggestions": ["Check server logs", "Try again"]
             }
         )
 

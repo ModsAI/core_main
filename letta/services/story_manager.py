@@ -109,13 +109,20 @@ class StoryManager:
                     processed_story_json = story_upload.dict()
                     processed_story_json["characters"] = [char.dict() for char in characters]
                     
+                    # DEBUG: Check scenes before saving
+                    scenes_dicts = [scene.dict() for scene in scenes]
+                    for i, scene_dict in enumerate(scenes_dicts):
+                        logger.info(f"DEBUG: Scene {i} has {len(scene_dict.get('narration_beats', []))} narration beats")
+                        for j, beat in enumerate(scene_dict.get('narration_beats', [])):
+                            logger.info(f"  DEBUG: Beat {j} has 'choices': {'choices' in beat}, value={beat.get('choices')}")
+                    
                     story_orm = StoryORM(
                         id=f"story-{uuid.uuid4()}",
                         story_id=story_id,
                         title=story_upload.title,
                         description=story_upload.description,
                         story_json=processed_story_json,  # Processed JSON with character_id
-                        scenes_json={"scenes": [scene.dict() for scene in scenes]},  # Processed scenes
+                        scenes_json={"scenes": scenes_dicts},  # Processed scenes
                         story_metadata={
                             "character_count": len(characters),
                             "scene_count": len(scenes),
@@ -348,6 +355,8 @@ class StoryManager:
                             "timing_hint": instruction.timing_hint,
                             "sfx": instruction.sfx,
                             "music_cue": instruction.music_cue,
+                            # Multiple choice support (Kon Unity integration)
+                            "choices": instruction.choices,
                         }
                         current_scene.dialogue_beats.append(dialogue_beat)
                         
@@ -379,12 +388,17 @@ class StoryManager:
                             "timing_hint": instruction.timing_hint,
                             "sfx": instruction.sfx,
                             "music_cue": instruction.music_cue,
+                            # Multiple choice support (Kon Unity integration)
+                            "choices": instruction.choices,
                         }
+                        logger.info(f"    DEBUG: Created narration_beat with choices={narration_beat.get('choices')}")
                         current_scene.narration_beats.append(narration_beat)
+                        logger.info(f"    DEBUG: Scene now has {len(current_scene.narration_beats)} narration beats")
                         
-                        logger.debug(
+                        logger.info(
                             f"    📖 Narration {narration_id} (global #{global_beat_number}): "
-                            f"{instruction.text[:30] if instruction.text else 'N/A'}... [{priority}]"
+                            f"{instruction.text[:30] if instruction.text else 'N/A'}... [{priority}] "
+                            f"CHOICES={instruction.choices}"
                         )
                     
                     # Q5: Track action beats (checkpoints)
@@ -410,6 +424,8 @@ class StoryManager:
                             "camera_angle": instruction.camera_angle,
                             "timing_hint": instruction.timing_hint,
                             "sfx": instruction.sfx,
+                            # Multiple choice support (Kon Unity integration)
+                            "choices": instruction.choices,
                         }
                         current_scene.action_beats.append(action_beat)
                         
