@@ -902,7 +902,16 @@ async def advance_story(
                 logger.debug(f"  ℹ️ Beat type {beat_type} doesn't need completion tracking")
 
         # Save session state
-        await session_manager._update_session_state_async(session_id, session.state, actor)
+        state_dict = session.state.model_dump(mode="json") if hasattr(session.state, "model_dump") else session.state.dict()
+        
+        async with db_registry.async_session() as db_session:
+            async with db_session.begin():
+                from sqlalchemy import update
+                from letta.orm.story import StorySession as StorySessionORM
+                
+                stmt = update(StorySessionORM).where(StorySessionORM.session_id == session_id).values(state=state_dict)
+                await db_session.execute(stmt)
+        
         logger.debug(f"  → Session state saved")
 
         # Get next instruction
