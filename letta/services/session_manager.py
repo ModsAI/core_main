@@ -830,6 +830,7 @@ class SessionManager:
                 "beat_number": None,
                 "global_beat_number": None,
                 "character": None,
+                "model": None,
                 "topic": "Story Complete",
                 "script_text": "The story has ended.",
                 "is_completed": True,
@@ -894,6 +895,12 @@ class SessionManager:
                     topic = beat.get("topic", "conversation")
                     script_text = beat.get("script_text", "")
 
+                    # Look up character to get model
+                    character_obj = next(
+                        (char for char in story.characters if char.name == character_name),
+                        None
+                    )
+
                     # Extract keywords from topic and script
                     keywords = []
                     if topic:
@@ -908,6 +915,7 @@ class SessionManager:
                         "beat_number": beat.get("beat_number"),
                         "global_beat_number": global_beat_number,
                         "character": character_name,
+                        "model": character_obj.model if character_obj else None,
                         "topic": topic,
                         "script_text": script_text,
                         "is_completed": False,
@@ -940,6 +948,7 @@ class SessionManager:
                         "beat_number": beat.get("beat_number"),
                         "global_beat_number": global_beat_number,
                         "character": None,
+                        "model": None,
                         "topic": "Narration",
                         "script_text": text,
                         "is_completed": False,
@@ -964,12 +973,20 @@ class SessionManager:
                 elif beat_type == "action":
                     character_name = beat.get("character", "Unknown")
                     action_text = beat.get("action_text", "")
+                    
+                    # Look up character to get model
+                    character_obj = next(
+                        (char for char in story.characters if char.name == character_name),
+                        None
+                    )
+                    
                     return {
                         "type": "action",
                         "beat_id": beat_id,
                         "beat_number": beat.get("beat_number"),
                         "global_beat_number": global_beat_number,
                         "character": character_name,
+                        "model": character_obj.model if character_obj else None,
                         "topic": "Action",
                         "script_text": action_text,
                         "is_completed": False,
@@ -999,6 +1016,7 @@ class SessionManager:
             "beat_number": None,
             "global_beat_number": None,
             "character": None,
+            "model": None,
             "topic": "Scene Transition",
             "script_text": f"All available dialogue beats completed in {current_scene.title}. Ready to advance to next scene.",
             "is_completed": True,

@@ -346,6 +346,7 @@ class NextInstructionInfo(BaseModel):
     beat_number: Optional[int] = Field(None, description="Beat number in scene (if dialogue)")
     global_beat_number: Optional[int] = Field(None, description="Global beat number across story (Q1)")
     character: Optional[str] = Field(None, description="Character who should speak/act")
+    model: Optional[str] = Field(None, description="3D model for this character (for Unity rendering)")
     topic: Optional[str] = Field(None, description="What this beat is about")
     script_text: Optional[str] = Field(None, description="Script text for this instruction")
     is_completed: bool = Field(..., description="Whether this instruction is completed")
