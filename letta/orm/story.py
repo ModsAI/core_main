@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from letta.orm.sqlalchemy_base import SqlalchemyBase
@@ -77,6 +77,9 @@ class StorySession(SqlalchemyBase):
 
     # Session state (stored as JSON)
     state: Mapped[dict] = mapped_column(JSON, nullable=False)  # SessionState schema
+
+    # Optimistic locking version (incremented on each update to prevent race conditions)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     # Character-to-agent mappings
     character_agents: Mapped[dict] = mapped_column(JSON, nullable=False)  # character_name -> agent_id

@@ -1228,3 +1228,70 @@ class SessionManager:
             total_scenes=len(story.scenes),
             metadata=story.metadata,
         )
+
+    async def update_session_state_with_version(
+        self,
+        session_id: str,
+        state: SessionState,
+        expected_version: int,
+        actor: User,
+    ) -> Dict[str, bool | int]:
+        """
+        Update session state with optimistic locking to prevent race conditions.
+        
+        Args:
+            session_id: Session to update
+            state: New state to save
+            expected_version: Expected current version (for optimistic lock)
+            actor: User performing the update
+            
+        Returns:
+            Dict with 'success': bool and either 'new_version': int or 'current_version': int
+        """
+        from sqlalchemy import update
+        
+        state_dict = state.model_dump(mode="json") if hasattr(state, "model_dump") else state.dict()
+        
+        async with db_registry.async_session() as db_session:
+            async with db_session.begin():
+                # Update only if version matches (optimistic lock)
+                stmt = (
+                    update(StorySessionORM)
+                    .where(
+                        StorySessionORM.session_id == session_id,
+                        StorySessionORM.version == expected_version
+                    )
+                    .values(
+                        state=state_dict,
+                        version=expected_version + 1,
+                        updated_at=datetime.utcnow()
+                    )
+                )
+                result = await db_session.execute(stmt)
+                
+                if result.rowcount == 0:
+                    # Version mismatch - state was modified by another request
+                    check_stmt = select(StorySessionORM.version).where(
+                        StorySessionORM.session_id == session_id
+                    )
+                    current_version_result = await db_session.execute(check_stmt)
+                    current_version_row = current_version_result.first()
+                    current_version = current_version_row[0] if current_version_row else None
+                    
+                    logger.warning(
+                        f"  ⚠️ Version mismatch for session {session_id}: "
+                        f"expected={expected_version}, current={current_version}"
+                    )
+                    return {
+                        "success": False,
+                        "current_version": current_version,
+                    }
+                else:
+                    logger.debug(
+                        f"  ✅ Session state updated: {session_id} "
+                        f"(version: {expected_version} → {expected_version + 1})"
+                    )
+                    return {
+                        "success": True,
+                        "new_version": expected_version + 1,
+                    }

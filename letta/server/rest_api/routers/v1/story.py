@@ -7,6 +7,7 @@ Provides endpoints for:
 - Dialogue generation (coming soon after Q6-Q10 answered)
 """
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -792,132 +793,99 @@ async def advance_story(
     - 400: Beat has choices (use /select-choice)
     - 400: Beat is dialogue (use /dialogue)
     - 400: Story is complete
+    - 409: Concurrent modification (auto-retried up to 3 times)
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
     logger.info(f"📍 Advance Story - Session: {session_id}, User: {actor.id}")
 
-    try:
-        session_manager = SessionManager()
-        story_manager = StoryManager()
+    # Retry logic for concurrent modifications (optimistic locking)
+    MAX_RETRIES = 3
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            session_manager = SessionManager()
+            story_manager = StoryManager()
+            
+            if attempt > 0:
+                logger.info(f"  ♻️ Retry attempt {attempt + 1}/{MAX_RETRIES}")
 
-        # Get session
-        session = await session_manager._get_session_by_id(session_id, actor)
-        if not session:
-            logger.error(f"  ✗ Session not found: {session_id}")
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "error": "SESSION_NOT_FOUND",
-                    "message": f"Session {session_id} not found",
-                    "suggestions": ["Check session ID", "Ensure session was created"],
-                },
-            )
-
-        # Get story
-        story = await story_manager.get_story(session.story_id, actor)
-        if not story:
-            logger.error(f"  ✗ Story not found: {session.story_id}")
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "error": "STORY_NOT_FOUND",
-                    "message": f"Story {session.story_id} not found",
-                    "suggestions": ["Check story ID", "Ensure story exists"],
-                },
-            )
-
-        # Get current instruction
-        current_instruction = session_manager._get_next_instruction(story, session.state)
-
-        if not current_instruction:
-            logger.warning(f"  ⚠️ No current instruction to advance from")
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "NO_INSTRUCTION",
-                    "message": "No current instruction to advance from. Story may be complete.",
-                    "suggestions": ["Check if story has ended", "Use /state to verify current position"],
-                },
-            )
-
-        # Get beat details
-        beat_type = current_instruction.get("type")
-        beat_id = current_instruction.get("beat_id")
-
-        logger.debug(f"  → Current instruction: type={beat_type}, beat_id={beat_id}")
-
-        # Check if this is an interactive beat that needs specific endpoints
-        if beat_type == "dialogue":
-            logger.warning(f"  ⚠️ Cannot advance dialogue beat - use /dialogue endpoint")
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "INVALID_BEAT_TYPE",
-                    "message": f"Cannot advance dialogue beat. Use /dialogue endpoint to send player message.",
-                    "beat_type": beat_type,
-                    "suggestions": ["Use POST /dialogue to send player message", "Player needs to interact with character"],
-                },
-            )
-
-        # Check if this instruction has choices
-        if current_instruction.get("choices"):
-            logger.warning(f"  ⚠️ Instruction has choices - should use /select-choice")
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "HAS_CHOICES",
-                    "message": "This instruction has choices. Use /select-choice endpoint instead.",
-                    "choices": current_instruction.get("choices"),
-                    "suggestions": ["Use POST /select-choice with choice_id", "Display choice buttons to player"],
-                },
-            )
-
-        # Check if story is complete
-        if beat_type == "end":
-            logger.info(f"  ✓ Story is complete")
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "STORY_COMPLETE",
-                    "message": "Story has ended. No more instructions to advance to.",
-                    "suggestions": ["Story is complete", "Can restart session with /restart"],
-                },
-            )
-        
-        # Check if this is a scene transition (all beats complete in current scene)
-        if beat_type == "setting" and current_instruction.get("is_completed"):
-            # Scene is complete - advance to next scene automatically
-            current_scene = session.state.current_scene_number
-            if current_scene < len(story.scenes):
-                logger.info(f"  🎬 Scene {current_scene} complete - auto-advancing to Scene {current_scene + 1}")
-                session.state.current_scene_number = current_scene + 1
-                session.state.completed_dialogue_beats = []
-                session.state.completed_narration_beats = []
-                session.state.completed_action_beats = []
-                
-                # Save state with new scene
-                state_dict = session.state.model_dump(mode="json") if hasattr(session.state, "model_dump") else session.state.dict()
-                async with db_registry.async_session() as db_session:
-                    async with db_session.begin():
-                        from sqlalchemy import update
-                        from letta.orm.story import StorySession as StorySessionORM
-                        stmt = update(StorySessionORM).where(StorySessionORM.session_id == session_id).values(state=state_dict)
-                        await db_session.execute(stmt)
-                
-                # Get next instruction from new scene
-                next_instruction = session_manager._get_next_instruction(story, session.state)
-                logger.info(f"  ✅ Advanced to Scene {current_scene + 1}")
-                
-                return AdvanceStoryResponse(
-                    success=True,
-                    advanced_from=f"scene-{current_scene}",
-                    beat_type="scene_transition",
-                    message=f"Advanced to Scene {current_scene + 1}",
-                    next_instruction=next_instruction,
-                    session_id=session_id,
+            # Get session
+            session = await session_manager._get_session_by_id(session_id, actor)
+            if not session:
+                logger.error(f"  ✗ Session not found: {session_id}")
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "error": "SESSION_NOT_FOUND",
+                        "message": f"Session {session_id} not found",
+                        "suggestions": ["Check session ID", "Ensure session was created"],
+                    },
                 )
-            else:
-                # Really at the end
+            
+            # Store original version for optimistic locking
+            original_version = getattr(session, 'version', 1)
+
+            # Get story
+            story = await story_manager.get_story(session.story_id, actor)
+            if not story:
+                logger.error(f"  ✗ Story not found: {session.story_id}")
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "error": "STORY_NOT_FOUND",
+                        "message": f"Story {session.story_id} not found",
+                        "suggestions": ["Check story ID", "Ensure story exists"],
+                    },
+                )
+
+            # Get current instruction
+            current_instruction = session_manager._get_next_instruction(story, session.state)
+
+            if not current_instruction:
+                logger.warning(f"  ⚠️ No current instruction to advance from")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "NO_INSTRUCTION",
+                        "message": "No current instruction to advance from. Story may be complete.",
+                        "suggestions": ["Check if story has ended", "Use /state to verify current position"],
+                    },
+                )
+
+            # Get beat details
+            beat_type = current_instruction.get("type")
+            beat_id = current_instruction.get("beat_id")
+
+            logger.debug(f"  → Current instruction: type={beat_type}, beat_id={beat_id}")
+
+            # Check if this is an interactive beat that needs specific endpoints
+            if beat_type == "dialogue":
+                logger.warning(f"  ⚠️ Cannot advance dialogue beat - use /dialogue endpoint")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "INVALID_BEAT_TYPE",
+                        "message": f"Cannot advance dialogue beat. Use /dialogue endpoint to send player message.",
+                        "beat_type": beat_type,
+                        "suggestions": ["Use POST /dialogue to send player message", "Player needs to interact with character"],
+                    },
+                )
+
+            # Check if this instruction has choices
+            if current_instruction.get("choices"):
+                logger.warning(f"  ⚠️ Instruction has choices - should use /select-choice")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "HAS_CHOICES",
+                        "message": "This instruction has choices. Use /select-choice endpoint instead.",
+                        "choices": current_instruction.get("choices"),
+                        "suggestions": ["Use POST /select-choice with choice_id", "Display choice buttons to player"],
+                    },
+                )
+
+            # Check if story is complete
+            if beat_type == "end":
                 logger.info(f"  ✓ Story is complete")
                 return JSONResponse(
                     status_code=400,
@@ -927,75 +895,143 @@ async def advance_story(
                         "suggestions": ["Story is complete", "Can restart session with /restart"],
                     },
                 )
-
-        # Mark beat as completed based on type
-        if beat_id:
-            if beat_type == "narration":
-                if beat_id not in session.state.completed_narration_beats:
-                    session.state.completed_narration_beats.append(beat_id)
-                    logger.info(f"  ✅ Marked narration beat as completed: {beat_id}")
+            
+            # Check if this is a scene transition (all beats complete in current scene)
+            if beat_type == "setting" and current_instruction.get("is_completed"):
+                # Scene is complete - advance to next scene automatically
+                current_scene = session.state.current_scene_number
+                if current_scene < len(story.scenes):
+                    logger.info(f"  🎬 Scene {current_scene} complete - auto-advancing to Scene {current_scene + 1}")
+                    session.state.current_scene_number = current_scene + 1
+                    session.state.completed_dialogue_beats = []
+                    session.state.completed_narration_beats = []
+                    session.state.completed_action_beats = []
+                    
+                    # Save state with new scene
+                    state_dict = session.state.model_dump(mode="json") if hasattr(session.state, "model_dump") else session.state.dict()
+                    async with db_registry.async_session() as db_session:
+                        async with db_session.begin():
+                            from sqlalchemy import update
+                            from letta.orm.story import StorySession as StorySessionORM
+                            stmt = update(StorySessionORM).where(StorySessionORM.session_id == session_id).values(state=state_dict)
+                            await db_session.execute(stmt)
+                    
+                    # Get next instruction from new scene
+                    next_instruction = session_manager._get_next_instruction(story, session.state)
+                    logger.info(f"  ✅ Advanced to Scene {current_scene + 1}")
+                    
+                    return AdvanceStoryResponse(
+                        success=True,
+                        advanced_from=f"scene-{current_scene}",
+                        beat_type="scene_transition",
+                        message=f"Advanced to Scene {current_scene + 1}",
+                        next_instruction=next_instruction,
+                        session_id=session_id,
+                    )
                 else:
-                    logger.debug(f"  ℹ️ Narration beat already completed: {beat_id}")
-            elif beat_type == "action":
-                if beat_id not in session.state.completed_action_beats:
-                    session.state.completed_action_beats.append(beat_id)
-                    logger.info(f"  ✅ Marked action beat as completed: {beat_id}")
+                    # Really at the end
+                    logger.info(f"  ✓ Story is complete")
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": "STORY_COMPLETE",
+                            "message": "Story has ended. No more instructions to advance to.",
+                            "suggestions": ["Story is complete", "Can restart session with /restart"],
+                        },
+                    )
+
+            # Mark beat as completed based on type
+            if beat_id:
+                if beat_type == "narration":
+                    if beat_id not in session.state.completed_narration_beats:
+                        session.state.completed_narration_beats.append(beat_id)
+                        logger.info(f"  ✅ Marked narration beat as completed: {beat_id}")
+                    else:
+                        logger.debug(f"  ℹ️ Narration beat already completed: {beat_id}")
+                elif beat_type == "action":
+                    if beat_id not in session.state.completed_action_beats:
+                        session.state.completed_action_beats.append(beat_id)
+                        logger.info(f"  ✅ Marked action beat as completed: {beat_id}")
+                    else:
+                        logger.debug(f"  ℹ️ Action beat already completed: {beat_id}")
                 else:
-                    logger.debug(f"  ℹ️ Action beat already completed: {beat_id}")
-            else:
-                logger.debug(f"  ℹ️ Beat type {beat_type} doesn't need completion tracking")
+                    logger.debug(f"  ℹ️ Beat type {beat_type} doesn't need completion tracking")
 
-        # Save session state
-        state_dict = session.state.model_dump(mode="json") if hasattr(session.state, "model_dump") else session.state.dict()
-        
-        async with db_registry.async_session() as db_session:
-            async with db_session.begin():
-                from sqlalchemy import update
-                from letta.orm.story import StorySession as StorySessionORM
-                
-                stmt = update(StorySessionORM).where(StorySessionORM.session_id == session_id).values(state=state_dict)
-                await db_session.execute(stmt)
-        
-        logger.debug(f"  → Session state saved")
+            # Save session state with optimistic locking
+            update_result = await session_manager.update_session_state_with_version(
+                session_id=session_id,
+                state=session.state,
+                expected_version=original_version,
+                actor=actor,
+            )
+            
+            if not update_result["success"]:
+                # Version mismatch - state was modified concurrently
+                if attempt < MAX_RETRIES - 1:
+                    # Retry with exponential backoff
+                    wait_time = 0.1 * (2 ** attempt)  # 0.1s, 0.2s, 0.4s
+                    logger.warning(f"  ⚠️ Concurrent modification detected - retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    continue  # Retry the loop
+                else:
+                    # Max retries exceeded
+                    logger.error(f"  ❌ Max retries exceeded - concurrent modifications ongoing")
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "error": "CONCURRENT_MODIFICATION",
+                            "message": "State was modified by another request. Max retries exceeded.",
+                            "suggestions": ["Try again", "Contact support if persists"],
+                        },
+                    )
+            
+            # Get next instruction
+            next_instruction = session_manager._get_next_instruction(story, session.state)
+            logger.debug(f"  → Next instruction: {next_instruction.get('type') if next_instruction else 'None'}")
 
-        # Get next instruction
-        next_instruction = session_manager._get_next_instruction(story, session.state)
-        logger.debug(f"  → Next instruction: {next_instruction.get('type') if next_instruction else 'None'}")
+            # Build response
+            response = AdvanceStoryResponse(
+                success=True,
+                advanced_from=beat_id,
+                beat_type=beat_type,
+                message=f"Advanced from {beat_type} beat",
+                next_instruction=next_instruction,
+                session_id=session_id,
+            )
 
-        # Build response
-        response = AdvanceStoryResponse(
-            success=True,
-            advanced_from=beat_id,
-            beat_type=beat_type,
-            message=f"Advanced from {beat_type} beat",
-            next_instruction=next_instruction,
-            session_id=session_id,
-        )
+            logger.info(f"  ✅ Story advanced successfully from {beat_type}")
+            return response
+            
+        except ValueError as e:
+            logger.error(f"❌ Advance Story FAILED (ValueError): {e}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "ADVANCE_FAILED",
+                    "message": str(e),
+                    "suggestions": ["Check session ID", "Verify story exists", "Check current instruction"],
+                },
+            )
 
-        logger.info(f"  ✅ Story advanced successfully from {beat_type}")
-        return response
-
-    except ValueError as e:
-        logger.error(f"❌ Advance Story FAILED (ValueError): {e}")
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": "ADVANCE_FAILED",
-                "message": str(e),
-                "suggestions": ["Check session ID", "Verify story exists", "Check current instruction"],
-            },
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Advance Story FAILED (Exception): {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "ADVANCE_FAILED",
-                "message": f"Failed to advance story: {str(e)}",
-                "suggestions": ["Check server logs", "Try again", "Contact support if issue persists"],
-            },
-        )
+        except Exception as e:
+            logger.error(f"❌ Advance Story FAILED (Exception): {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "ADVANCE_FAILED",
+                    "message": f"Failed to advance story: {str(e)}",
+                    "suggestions": ["Check server logs", "Try again", "Contact support if issue persists"],
+                },
+            )
+    
+    # This should never be reached due to returns in loop, but just in case
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "UNEXPECTED_ERROR",
+            "message": "Unexpected error in retry loop",
+        },
+    )
 
 
 @router.post("/sessions/{session_id}/advance-scene")
