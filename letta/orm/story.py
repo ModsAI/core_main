@@ -79,7 +79,8 @@ class StorySession(SqlalchemyBase):
     state: Mapped[dict] = mapped_column(JSON, nullable=False)  # SessionState schema
 
     # Optimistic locking version (incremented on each update to prevent race conditions)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    # Nullable=True for backwards compatibility with existing databases
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=1, server_default="1")
 
     # Character-to-agent mappings
     character_agents: Mapped[dict] = mapped_column(JSON, nullable=False)  # character_name -> agent_id
