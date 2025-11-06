@@ -791,6 +791,7 @@ class SessionManager:
             created_at=session_orm.created_at,
             updated_at=session_orm.updated_at,
             completed_at=session_orm.completed_at,
+            version=session_orm.version,  # Include version for optimistic locking
         )
 
     # ============================================================

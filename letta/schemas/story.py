@@ -171,6 +171,7 @@ class StorySession(BaseModel):
     created_at: datetime = Field(..., description="Session creation time")
     updated_at: datetime = Field(..., description="Last update time")
     completed_at: Optional[datetime] = Field(None, description="Completion time")
+    version: Optional[int] = Field(None, description="Version for optimistic locking (concurrency control)")
 
     class Config:
         from_attributes = True
