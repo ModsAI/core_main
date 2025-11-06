@@ -656,7 +656,7 @@ async def select_choice(
     logger.info(f"🎯 Choice selection: session={session_id}, choice_id={request.choice_id}")
 
     try:
-        from sqlalchemy import select
+        from sqlalchemy import select, update
 
         from letta.orm.story import StorySession as StorySessionORM
         from letta.services.session_manager import SessionManager
@@ -674,6 +674,24 @@ async def select_choice(
         if not story:
             raise ValueError(f"Story '{session.story_id}' not found")
 
+        # Store original version for optimistic locking
+        # FIX: Handle NULL version (same as advance-story fix)
+        original_version = session.version if session.version is not None else 1
+        
+        # If version was NULL, initialize it to 1 immediately
+        if session.version is None:
+            logger.warning(f"  ⚠️ Session {session_id} has NULL version, initializing to 1")
+            async with db_registry.async_session() as init_session:
+                async with init_session.begin():
+                    stmt = update(StorySessionORM).where(
+                        StorySessionORM.session_id == session_id,
+                        StorySessionORM.version.is_(None)  # Use IS NULL check
+                    ).values(version=1)
+                    await init_session.execute(stmt)
+            # Re-fetch session with updated version
+            session = await session_manager._get_session_by_id(session_id, actor)
+            original_version = 1
+
         # Record choice in session state
         choice_record = {
             "choice_id": request.choice_id,
@@ -688,15 +706,25 @@ async def select_choice(
 
         logger.info(f"  ✓ Choice recorded: {request.choice_id}, advanced to instruction {session.state.current_instruction_index}")
 
-        # Save to database
-        state_dict = session.state.model_dump(mode="json") if hasattr(session.state, "model_dump") else session.state.dict()
-
-        async with db_registry.async_session() as db_session:
-            async with db_session.begin():
-                stmt = select(StorySessionORM).where(StorySessionORM.session_id == session_id)
-                result = await db_session.execute(stmt)
-                session_orm = result.scalar_one()
-                session_orm.state = state_dict
+        # Save session state with optimistic locking (FIXED - use proper method)
+        update_result = await session_manager.update_session_state_with_version(
+            session_id=session_id,
+            state=session.state,
+            expected_version=original_version,
+            actor=actor,
+        )
+        
+        if not update_result["success"]:
+            # Version mismatch - state was modified concurrently
+            logger.error(f"  ❌ Concurrent modification detected during choice selection")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "CONCURRENT_MODIFICATION",
+                    "message": "State was modified by another request. Please try again.",
+                    "suggestions": ["Try selecting the choice again", "Refresh session state"],
+                },
+            )
 
         logger.info(f"✅ Choice selection complete: {request.choice_id}")
 
