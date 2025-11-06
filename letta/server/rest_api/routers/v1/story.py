@@ -823,7 +823,24 @@ async def advance_story(
                 )
             
             # Store original version for optimistic locking
-            original_version = getattr(session, 'version', 1)
+            # FIX: Handle NULL version (existing sessions before migration)
+            original_version = session.version if session.version is not None else 1
+            
+            # If version was NULL, initialize it to 1 immediately
+            if session.version is None:
+                logger.warning(f"  ⚠️ Session {session_id} has NULL version, initializing to 1")
+                from sqlalchemy import update
+                from letta.orm.story import StorySession as StorySessionORM
+                async with db_registry.async_session() as init_session:
+                    async with init_session.begin():
+                        stmt = update(StorySessionORM).where(
+                            StorySessionORM.session_id == session_id,
+                            StorySessionORM.version.is_(None)  # Use IS NULL check
+                        ).values(version=1)
+                        await init_session.execute(stmt)
+                # Re-fetch session with updated version
+                session = await session_manager._get_session_by_id(session_id, actor)
+                original_version = 1
 
             # Get story
             story = await story_manager.get_story(session.story_id, actor)
