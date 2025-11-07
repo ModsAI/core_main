@@ -1002,6 +1002,10 @@ async def advance_story(
                 else:
                     logger.debug(f"  ℹ️ Beat type {beat_type} doesn't need completion tracking")
 
+            # FIX: Increment instruction index (same as /select-choice does)
+            session.state.current_instruction_index += 1
+            logger.debug(f"  → Instruction index advanced to {session.state.current_instruction_index}")
+
             # Save session state with optimistic locking
             update_result = await session_manager.update_session_state_with_version(
                 session_id=session_id,
