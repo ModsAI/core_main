@@ -692,6 +692,9 @@ async def select_choice(
             session = await session_manager._get_session_by_id(session_id, actor)
             original_version = 1
 
+        # Get the current beat (the one with choices) so we can mark it as completed
+        current_beat = session_manager._get_next_instruction(story, session.state)
+        
         # Record choice in session state
         choice_record = {
             "choice_id": request.choice_id,
@@ -699,6 +702,24 @@ async def select_choice(
             "timestamp": datetime.now().isoformat(),
         }
         session.state.player_choices.append(choice_record)
+
+        # FIX: Mark the current beat as completed (this was missing!)
+        if current_beat and current_beat.get("beat_id"):
+            beat_id = current_beat["beat_id"]
+            beat_type = current_beat.get("type")
+            
+            if beat_type == "dialogue":
+                if beat_id not in session.state.completed_dialogue_beats:
+                    session.state.completed_dialogue_beats.append(beat_id)
+                    logger.info(f"  ✅ Completed dialogue beat: {beat_id}")
+            elif beat_type == "narration":
+                if beat_id not in session.state.completed_narration_beats:
+                    session.state.completed_narration_beats.append(beat_id)
+                    logger.info(f"  ✅ Completed narration beat: {beat_id}")
+            elif beat_type == "action":
+                if beat_id not in session.state.completed_action_beats:
+                    session.state.completed_action_beats.append(beat_id)
+                    logger.info(f"  ✅ Completed action beat: {beat_id}")
 
         # Advance to next instruction
         current_scene = story.scenes[session.state.current_scene_number - 1]
