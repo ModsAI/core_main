@@ -55,9 +55,9 @@ async def upload_story(
 ):
     """
     Upload a new story or update an existing one.
-
+    
     Converts TypeScript story JSON to internal format and stores in database.
-
+    
     **Process:**
     1. Validates story structure
     2. Generates character IDs
@@ -65,7 +65,7 @@ async def upload_story(
     4. Extracts dialogue beats
     5. Stores in database
     6. If `overwrite=true`, deletes existing story first
-
+    
     **Example Request:**
     ```json
     {
@@ -102,13 +102,13 @@ async def upload_story(
         ]
     }
     ```
-
+    
     **Returns:**
     - Story ID
     - Scene count
     - Character count
     - Next steps
-
+    
     **Errors:**
     - 400: Invalid story structure
     - 409: Story ID already exists
@@ -116,7 +116,7 @@ async def upload_story(
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
     logger.info(f"📤 Story upload request: {story.title} (user: {actor.id}, overwrite={overwrite})")
-
+    
     try:
         story_manager = StoryManager()
         
@@ -129,10 +129,10 @@ async def upload_story(
                 await story_manager.delete_story(story_id, actor)
         
         response = await story_manager.upload_story(story, actor)
-
+        
         logger.info(f"✅ Story uploaded: {response.story_id}")
         return response
-
+    
     except ValueError as e:
         logger.error(f"❌ Story upload validation error: {e}")
         raise HTTPException(
@@ -148,10 +148,10 @@ async def upload_story(
                 ],
             },
         )
-
+    
     except Exception as e:
         error_msg = str(e)
-
+        
         # Check for duplicate story
         if "already exists" in error_msg.lower():
             logger.error(f"❌ Duplicate story ID: {story.id}")
@@ -167,7 +167,7 @@ async def upload_story(
                     ],
                 },
             )
-
+        
         # Generic error
         logger.error(f"❌ Story upload error: {e}", exc_info=True)
         raise HTTPException(
@@ -197,46 +197,46 @@ async def start_session(
 ):
     """
     Start a new story session.
-
+    
     **Important:**
     - Only ONE active session per story per user
     - Starting a new session will DELETE any existing session for that story
     - This creates Letta agents for all characters (may take 10-30 seconds)
-
+    
     **Process:**
     1. Retrieves story from database
     2. Deletes any existing session for this story
     3. Creates Letta agents for all characters
     4. Initializes session state
     5. Returns first scene
-
+    
     **Example Request:**
     ```json
     {
         "story_id": "story-1001"
     }
     ```
-
+    
     **Returns:**
     - Session ID
     - First scene
     - Player character name
     - Instructions for next steps
-
+    
     **Errors:**
     - 404: Story not found
     - 500: Agent creation or database error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
     logger.info(f"🎬 Session start request: {session_create.story_id} (user: {actor.id})")
-
+    
     try:
         session_manager = SessionManager()
         response = await session_manager.start_session(session_create, actor)
-
+        
         logger.info(f"✅ Session started: {response.session_id}")
         return response
-
+    
     except ValueError as e:
         logger.error(f"❌ Session start validation error: {e}")
         raise HTTPException(
@@ -251,11 +251,11 @@ async def start_session(
                 ],
             },
         )
-
+    
     except Exception as e:
         error_msg = str(e)
         logger.error(f"❌ Session start error: {e}", exc_info=True)
-
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -279,36 +279,36 @@ async def resume_session(
 ):
     """
     Resume an existing session.
-
+    
     Finds and resumes the active session for a given story.
-
+    
     **Example Request:**
     ```json
     {
         "story_id": "story-1005"
     }
     ```
-
+    
     **Returns:**
     - Session details
     - Current scene
     - Current progress
     - Recent chat history
-
+    
     **Errors:**
     - 404: No active session found for this story
     - 500: Database error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
     logger.info(f"▶️ Session resume request: {session_resume.story_id} (user: {actor.id})")
-
+    
     try:
         session_manager = SessionManager()
         response = await session_manager.resume_session(session_resume.story_id, actor)
-
+        
         logger.info(f"✅ Session resumed for story: {session_resume.story_id}")
         return response
-
+    
     except ValueError as e:
         logger.error(f"❌ Session resume validation error: {e}")
         raise HTTPException(
@@ -323,7 +323,7 @@ async def resume_session(
                 ],
             },
         )
-
+    
     except Exception as e:
         logger.error(f"❌ Session resume error: {e}", exc_info=True)
         raise HTTPException(
@@ -348,36 +348,36 @@ async def restart_session(
 ):
     """
     Restart a session from the beginning.
-
+    
     **Warning: This is DESTRUCTIVE!**
     - Deletes all character agents
     - Wipes all progress
     - Creates new agents
     - Starts from scene 1
-
+    
     **Example:**
     ```
     POST /api/v1/story/sessions/session-abc123/restart
     ```
-
+    
     **Returns:**
     - New session ID
     - Success message
-
+    
     **Errors:**
     - 404: Session not found
     - 500: Deletion or creation error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
     logger.info(f"🔄 Session restart request: {session_id} (user: {actor.id})")
-
+    
     try:
         session_manager = SessionManager()
         response = await session_manager.restart_session(session_id, actor)
-
+        
         logger.info(f"✅ Session restarted: {response.session_id}")
         return response
-
+    
     except ValueError as e:
         logger.error(f"❌ Session restart validation error: {e}")
         raise HTTPException(
@@ -391,7 +391,7 @@ async def restart_session(
                 ],
             },
         )
-
+    
     except Exception as e:
         logger.error(f"❌ Session restart error: {e}", exc_info=True)
         raise HTTPException(
@@ -416,31 +416,31 @@ async def delete_session(
 ):
     """
     Delete a session permanently.
-
+    
     **Warning: This is PERMANENT!**
     - Deletes all character agents
     - Removes session from database
     - Cannot be undone
-
+    
     **Example:**
     ```
     DELETE /api/v1/story/sessions/session-abc123
     ```
-
+    
     **Returns:**
     - Success message
-
+    
     **Errors:**
     - 404: Session not found
     - 500: Deletion error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
     logger.info(f"🗑️ Session delete request: {session_id} (user: {actor.id})")
-
+    
     try:
         session_manager = SessionManager()
         deleted = await session_manager.delete_session(session_id, actor)
-
+        
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -449,13 +449,13 @@ async def delete_session(
                     "message": f"Session '{session_id}' not found",
                 },
             )
-
+        
         logger.info(f"✅ Session deleted: {session_id}")
         return {"success": True, "message": f"Session {session_id} deleted successfully"}
-
+    
     except HTTPException:
         raise
-
+    
     except Exception as e:
         logger.error(f"❌ Session delete error: {e}", exc_info=True)
         raise HTTPException(
@@ -486,21 +486,21 @@ async def generate_dialogue(
 ):
     """
     Generate character dialogue with script guidance.
-
+    
     **How It Works:**
     1. Player sends message to character
     2. System gets next dialogue beat from script
     3. Agent responds naturally while covering script topic
     4. Beat marked as completed
     5. Scene auto-advances when all beats done
-
+    
     **Dialogue Behavior (Per Requirements):**
     - **Script Guidance (Q6):** Agent uses script as CONTEXT, responds naturally, guides conversation forward
     - **Off-Topic (Q7):** Agent answers briefly, then redirects to script
     - **Scene Progression (Q8):** Automatic when all dialogue beats completed
     - **Skipping (Q9):** Not allowed - must complete all beats
     - **Error Fallback (Q10):** Uses scripted text if agent fails, retries automatically
-
+    
     **Example Request:**
     ```json
     {
@@ -508,7 +508,7 @@ async def generate_dialogue(
         "target_character": "tatsuya"
     }
     ```
-
+    
     **Example Response:**
     ```json
     {
@@ -524,7 +524,7 @@ async def generate_dialogue(
         "next_scene_number": null
     }
     ```
-
+    
     **Returns:**
     - Character response (natural, script-guided)
     - Emotion (for Unity facial expression)
@@ -533,7 +533,7 @@ async def generate_dialogue(
     - Scene progress (0.0 to 1.0)
     - Scene complete flag
     - Next scene number (if auto-advanced)
-
+    
     **Errors:**
     - 404: Session not found
     - 404: Character not found
@@ -541,16 +541,16 @@ async def generate_dialogue(
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
     logger.info(f"💬 Dialogue request: session={session_id}, character={request.target_character}")
-
+    
     try:
         from letta.services.dialogue_manager import DialogueManager
-
+        
         dialogue_manager = DialogueManager(server=server)
         response = await dialogue_manager.generate_dialogue(session_id, request, actor)
-
+        
         logger.info(f"✅ Dialogue generated: {len(response.dialogue_text)} chars")
         return response
-
+    
     except ValueError as e:
         logger.error(f"❌ Dialogue validation error: {e}")
         raise HTTPException(
@@ -565,11 +565,11 @@ async def generate_dialogue(
                 ],
             },
         )
-
+    
     except Exception as e:
         error_msg = str(e)
         logger.error(f"❌ Dialogue generation error: {e}", exc_info=True)
-
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -786,15 +786,15 @@ async def advance_story(
     Advance story to next instruction (player "tap to continue").
 
     **Purpose:**
-    Simple endpoint for when player just wants to continue/advance the story
-    without making a choice or typing dialogue. This is for non-interactive
-    beats like narration, actions, and setting descriptions.
+    Allows player to continue/advance the story without typing custom messages.
+    Supports BOTH tap-through dialogue and non-interactive beats.
 
     **Use Cases:**
-    - Narration without choices → Player taps "Continue"
-    - Action beats → Player taps to acknowledge
-    - Setting descriptions → Player taps to proceed
-    - Any non-interactive instruction
+    - **Dialogue beats** → Player taps to use scripted text (tap-through mode)
+    - **Narration beats** → Player taps "Continue"
+    - **Action beats** → Player taps to acknowledge
+    - **Setting descriptions** → Player taps to proceed
+    - Any instruction that doesn't require player input
 
     **How It Works:**
     1. Get current session state
@@ -804,9 +804,13 @@ async def advance_story(
 
     **Difference from other endpoints:**
     - `/select-choice`: For when player chooses from options
-    - `/dialogue`: For when player types a message
-    - `/advance-story`: For when player just taps to continue
+    - `/dialogue`: For custom player messages (AI-generated responses)
+    - `/advance-story`: For tap-through (uses scripted text, no AI)
     - `/skip-beat`: For QA/admin to force-skip (requires beat_id)
+    
+    **Dialogue Modes (NEW):**
+    - **Tap-through** (`/advance-story`): Fast, uses scripted text, no typing
+    - **Custom** (`/dialogue`): Player types message, AI generates response
 
     **Example Request:**
     ```
@@ -840,7 +844,6 @@ async def advance_story(
     **Errors:**
     - 404: Session not found
     - 400: Beat has choices (use /select-choice)
-    - 400: Beat is dialogue (use /dialogue)
     - 400: Story is complete
     - 409: Concurrent modification (auto-retried up to 3 times)
     """
@@ -924,18 +927,15 @@ async def advance_story(
 
             logger.debug(f"  → Current instruction: type={beat_type}, beat_id={beat_id}")
 
-            # Check if this is an interactive beat that needs specific endpoints
+            # NEW: Allow dialogue beats to be "tapped through" using scripted text
+            # This supports Kon's requirement for BOTH tap-through and custom dialogue
             if beat_type == "dialogue":
-                logger.warning(f"  ⚠️ Cannot advance dialogue beat - use /dialogue endpoint")
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "error": "INVALID_BEAT_TYPE",
-                        "message": f"Cannot advance dialogue beat. Use /dialogue endpoint to send player message.",
-                        "beat_type": beat_type,
-                        "suggestions": ["Use POST /dialogue to send player message", "Player needs to interact with character"],
-                    },
-                )
+                logger.info(f"  💬 Tap-through dialogue beat (using scripted text)")
+                # Mark dialogue beat as completed
+                if beat_id and beat_id not in session.state.completed_dialogue_beats:
+                    session.state.completed_dialogue_beats.append(beat_id)
+                    logger.info(f"  ✅ Marked dialogue beat as completed: {beat_id}")
+                # Will advance instruction index below (same as other beats)
 
             # Check if this instruction has choices
             if current_instruction.get("choices"):
@@ -985,6 +985,21 @@ async def advance_story(
                     # Get next instruction from new scene
                     next_instruction = session_manager._get_next_instruction(story, session.state)
                     logger.info(f"  ✅ Advanced to Scene {current_scene + 1}")
+                    
+                    # Update NPC memory blocks with new scene context
+                    try:
+                        update_result = await session_manager.update_scene_memory_blocks(
+                            session_id=session_id,
+                            new_scene_number=current_scene + 1,
+                            actor=actor,
+                        )
+                        logger.info(
+                            f"  🧠 Updated {update_result['updated_agents']}/{update_result['total_agents']} "
+                            f"agent memories for Scene {current_scene + 1}"
+                        )
+                    except Exception as e:
+                        # Don't fail the entire scene transition if memory update fails
+                        logger.error(f"  ⚠️ Failed to update scene memories: {e}", exc_info=True)
                     
                     return AdvanceStoryResponse(
                         success=True,
@@ -1222,6 +1237,21 @@ async def advance_scene_manually(
                 logger.debug(f"  ✓ Database updated - Rows affected: {result.rowcount}")
 
         logger.info(f"✅ Q6 Scene Advance SUCCESS - {previous_scene} → {new_scene_num} ('{new_scene.title}')")
+
+        # Update NPC memory blocks with new scene context
+        try:
+            update_result = await session_manager.update_scene_memory_blocks(
+                session_id=session_id,
+                new_scene_number=new_scene_num,
+                actor=actor,
+            )
+            logger.info(
+                f"  🧠 Updated {update_result['updated_agents']}/{update_result['total_agents']} "
+                f"agent memories for Scene {new_scene_num}"
+            )
+        except Exception as e:
+            # Don't fail the entire scene transition if memory update fails
+            logger.error(f"  ⚠️ Failed to update scene memories: {e}", exc_info=True)
 
         return {
             "success": True,
@@ -1726,7 +1756,7 @@ async def get_session_state(
 async def story_health():
     """
     Health check for story system.
-
+    
     Returns system status and available features.
     """
     return {

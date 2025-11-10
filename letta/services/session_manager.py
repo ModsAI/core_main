@@ -32,6 +32,7 @@ from letta.schemas.story import (
 from letta.schemas.user import User
 from letta.server.db import db_registry
 from letta.services.agent_manager import AgentManager
+from letta.services.block_manager import BlockManager
 from letta.services.story_manager import StoryManager
 
 logger = get_logger(__name__)
@@ -52,6 +53,7 @@ class SessionManager:
     def __init__(self):
         self.story_manager = StoryManager()
         self.agent_manager = AgentManager()
+        self.block_manager = BlockManager()
         logger.info("🎮 SessionManager initialized")
 
     async def start_session(
@@ -1296,3 +1298,265 @@ class SessionManager:
                         "success": True,
                         "new_version": expected_version + 1,
                     }
+
+    # ============================================================
+    # Core Memory Updates - Scene Progression
+    # ============================================================
+
+    async def update_scene_memory_blocks(
+        self,
+        session_id: str,
+        new_scene_number: int,
+        actor: User,
+    ) -> Dict[str, any]:
+        """
+        Update all character agents' current_scene memory block when scene changes.
+        
+        This ensures NPCs always reference the correct scene context (location, mood, etc.)
+        instead of being stuck in Scene 1 throughout the entire story.
+        
+        **What Gets Updated:**
+        - Current scene info (scene number, title, location, mood)
+        - Scene history (tracks journey: "we were in factory, now on rooftop")
+        
+        **Called From:**
+        1. dialogue_manager.py - After auto-advance from dialogue beats
+        2. story.py /advance-story - After auto-advance from narration/action
+        3. story.py /advance-scene - After manual scene advance
+        
+        **Performance:**
+        - Updates run in parallel using asyncio.gather()
+        - Robust error handling (one failure doesn't block others)
+        
+        Args:
+            session_id: Story session ID
+            new_scene_number: New scene number (1-indexed)
+            actor: User performing the action
+            
+        Returns:
+            Dict with success status and update counts
+            
+        Raises:
+            ValueError: If session or story not found
+            
+        Example:
+            >>> await session_manager.update_scene_memory_blocks(
+            ...     session_id="session-123",
+            ...     new_scene_number=5,
+            ...     actor=user
+            ... )
+            {
+                "success": True,
+                "updated_agents": 3,
+                "failed_agents": 0,
+                "total_agents": 3
+            }
+        """
+        logger.info(
+            f"🔄 Updating scene memory blocks: "
+            f"session={session_id}, new_scene={new_scene_number}"
+        )
+        
+        # Step 1: Get session and story
+        session = await self._get_session_by_id(session_id, actor)
+        if not session:
+            raise ValueError(f"Session '{session_id}' not found")
+        
+        story = await self.story_manager.get_story_by_id(session.story_id, actor)
+        if not story:
+            raise ValueError(f"Story '{session.story_id}' not found")
+        
+        # Step 2: Validate scene number
+        if new_scene_number < 1 or new_scene_number > len(story.scenes):
+            logger.warning(
+                f"  ⚠️ Invalid scene number: {new_scene_number} "
+                f"(valid range: 1-{len(story.scenes)})"
+            )
+            return {
+                "success": False,
+                "error": "Invalid scene number",
+                "updated_agents": 0,
+                "failed_agents": 0,
+                "total_agents": len(session.character_agents),
+            }
+        
+        # Step 3: Build new scene context with history
+        new_scene = story.scenes[new_scene_number - 1]
+        scene_value = self._build_scene_context_with_history(
+            current_scene=new_scene,
+            all_scenes=story.scenes,
+            current_scene_number=new_scene_number,
+        )
+        
+        # Step 4: Update all character agents in parallel
+        from letta.schemas.block import BlockUpdate
+        import asyncio
+        
+        async def update_agent_scene_memory(char_id: str, agent_id: str) -> Dict[str, any]:
+            """Update single agent's scene memory. Returns result dict."""
+            try:
+                # Get agent to find current_scene block ID
+                agent = await self.agent_manager.get_agent_by_id_async(agent_id, actor)
+                
+                # Find current_scene block
+                scene_block = None
+                for block in agent.memory.blocks:
+                    if block.label == "current_scene":
+                        scene_block = block
+                        break
+                
+                if not scene_block:
+                    logger.warning(
+                        f"  ⚠️ No current_scene block found for {char_id} "
+                        f"(agent {agent_id})"
+                    )
+                    return {
+                        "char_id": char_id,
+                        "agent_id": agent_id,
+                        "success": False,
+                        "error": "No current_scene block found",
+                    }
+                
+                # Update block value
+                await self.block_manager.update_block_async(
+                    block_id=scene_block.id,
+                    block_update=BlockUpdate(value=scene_value),
+                    actor=actor,
+                )
+                
+                logger.debug(f"  ✅ Updated scene memory: {char_id} (agent {agent_id})")
+                return {
+                    "char_id": char_id,
+                    "agent_id": agent_id,
+                    "success": True,
+                }
+                
+            except Exception as e:
+                logger.error(
+                    f"  ❌ Failed to update scene memory for {char_id}: {e}",
+                    exc_info=True,
+                )
+                return {
+                    "char_id": char_id,
+                    "agent_id": agent_id,
+                    "success": False,
+                    "error": str(e),
+                }
+        
+        # Execute updates in parallel (performance optimization)
+        update_tasks = [
+            update_agent_scene_memory(char_id, agent_id)
+            for char_id, agent_id in session.character_agents.items()
+        ]
+        
+        results = await asyncio.gather(*update_tasks, return_exceptions=False)
+        
+        # Step 5: Count successes and failures
+        updated_count = sum(1 for r in results if r.get("success"))
+        failed_count = sum(1 for r in results if not r.get("success"))
+        total_count = len(results)
+        
+        # Step 6: Log summary
+        if failed_count == 0:
+            logger.info(
+                f"✅ Successfully updated scene memory for all {updated_count} agents "
+                f"(Scene {new_scene_number}: {new_scene.title})"
+            )
+        else:
+            logger.warning(
+                f"⚠️ Updated {updated_count}/{total_count} agents "
+                f"({failed_count} failed)"
+            )
+            for result in results:
+                if not result.get("success"):
+                    logger.warning(
+                        f"  - {result['char_id']}: {result.get('error', 'Unknown error')}"
+                    )
+        
+        return {
+            "success": updated_count > 0,  # Success if at least one updated
+            "updated_agents": updated_count,
+            "failed_agents": failed_count,
+            "total_agents": total_count,
+            "scene_number": new_scene_number,
+            "scene_title": new_scene.title,
+        }
+    
+    def _build_scene_context_with_history(
+        self,
+        current_scene: Scene,
+        all_scenes: List[Scene],
+        current_scene_number: int,
+    ) -> str:
+        """
+        Build scene context with history tracking.
+        
+        Instead of just current scene, this includes:
+        1. Current scene details (location, mood)
+        2. Scene history (where we've been)
+        3. Journey context for better NPC memory
+        
+        Args:
+            current_scene: Current scene object
+            all_scenes: All scenes in the story
+            current_scene_number: Current scene number (1-indexed)
+            
+        Returns:
+            Formatted scene context string with history
+            
+        Example Output:
+            === CURRENT SCENE ===
+            Scene 5: The Final Confrontation
+            Location: Corporate Headquarters - Rooftop
+            
+            SCENE HISTORY (Your Journey So Far):
+            • Scene 1: The Awakening - Abandoned Factory
+            • Scene 2: The System's Whispers - City Streets
+            • Scene 3: The First Trial - Underground Lab
+            • Scene 4: The Revelation - Corporate Headquarters - Lobby
+            • Scene 5: The Final Confrontation - Corporate Headquarters - Rooftop (CURRENT)
+            
+            You are currently in this scene. Remember your journey and respond naturally.
+        """
+        context_parts = [
+            "=== CURRENT SCENE ===",
+            f"Scene {current_scene.scene_number}: {current_scene.title}",
+            "",
+        ]
+        
+        # Add location
+        if current_scene.location:
+            context_parts.append(f"Location: {current_scene.location}")
+        
+        # Extract mood from scene (if available)
+        mood_indicators = []
+        if "mood:" in current_scene.location.lower():
+            # Extract mood from "Mood: desperate, fearful" format
+            mood_part = current_scene.location.lower().split("mood:")[-1].strip()
+            mood_indicators.append(f"Mood: {mood_part}")
+        
+        if mood_indicators:
+            context_parts.extend(mood_indicators)
+        
+        # Add scene history (user requested this)
+        if current_scene_number > 1:
+            context_parts.extend([
+                "",
+                "SCENE HISTORY (Your Journey So Far):",
+            ])
+            
+            # List all scenes up to current
+            for scene in all_scenes[:current_scene_number]:
+                scene_marker = " (CURRENT)" if scene.scene_number == current_scene_number else ""
+                context_parts.append(
+                    f"• Scene {scene.scene_number}: {scene.title} - "
+                    f"{scene.location}{scene_marker}"
+                )
+        
+        # Add context reminder
+        context_parts.extend([
+            "",
+            "You are currently in this scene. Remember your journey and respond naturally to what happens.",
+        ])
+        
+        return "\n".join(context_parts)

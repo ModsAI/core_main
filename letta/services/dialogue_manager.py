@@ -114,7 +114,9 @@ class DialogueManager:
             logger.debug(f"  📍 Current scene: {current_scene.title}")
             
             # Q8: Character Presence Validation - Ensure character is in current scene
-            if request.target_character not in current_scene.characters:
+            # Convert to lowercase for case-insensitive matching
+            target_character_lower = request.target_character.lower()
+            if target_character_lower not in current_scene.characters:
                 # Get character names for better error message
                 present_character_names = []
                 for char_id in current_scene.characters:
@@ -124,7 +126,7 @@ class DialogueManager:
                 
                 # Find target character name
                 target_char_obj = next(
-                    (c for c in story.characters if c.character_id == request.target_character),
+                    (c for c in story.characters if c.character_id == target_character_lower),
                     None
                 )
                 target_name = target_char_obj.name if target_char_obj else request.target_character
@@ -136,38 +138,44 @@ class DialogueManager:
                     f"You can only talk to characters who are in the current scene."
                 )
             
-            # Step 3: Get character agent
-            agent_id = session.character_agents.get(request.target_character)
+            # Step 3: Get character agent (use lowercase for lookup)
+            agent_id = session.character_agents.get(target_character_lower)
             if not agent_id:
                 raise ValueError(
                     f"Character '{request.target_character}' not found in session. "
                     f"Available: {list(session.character_agents.keys())}"
                 )
             
-            # Step 4: Get next dialogue beat for this character
+            # Step 4: Get next dialogue beat for this character (use lowercase)
             next_beat = self._get_next_dialogue_beat(
                 current_scene,
-                request.target_character,
+                target_character_lower,
                 session.state,
                 story.characters,
             )
             
-            # Step 5: Generate dialogue with script guidance
+            # Step 5: Generate dialogue with script guidance (use lowercase)
             character_response, emotion, animation = await self._generate_with_script_guidance(
                 agent_id=agent_id,
                 player_message=request.player_message,
-                character_name=request.target_character,
+                character_name=target_character_lower,
                 next_beat=next_beat,
                 scene=current_scene,
                 actor=actor,
             )
             
-            # Step 6: Check if beat was completed
+            # Step 6: Mark beat as completed and auto-advance
             beats_completed = []
-            if next_beat and self._beat_was_addressed(character_response, next_beat):
+            if next_beat:
                 beats_completed.append(next_beat["beat_id"])
                 session.state.completed_dialogue_beats.append(next_beat["beat_id"])
                 logger.info(f"  ✅ Beat completed: {next_beat['beat_id']}")
+                
+                # ✅ FIX: Auto-advance instruction index after successful dialogue
+                # NOTE: We ALWAYS advance after dialogue, regardless of keyword matching
+                # This matches Kon's requirement: "state should change after sending chat message"
+                session.state.current_instruction_index += 1
+                logger.info(f"  ➡️ Auto-advancing to next instruction (index: {session.state.current_instruction_index})")
             
             # Step 7: Update session state
             await self._update_session_state(session_id, session.state, actor)
@@ -188,14 +196,29 @@ class DialogueManager:
                 await self._update_session_state(session_id, session.state, actor)
                 logger.info(f"  🎬 Scene complete! Auto-advancing to scene {next_scene_number}")
             
+                # Update NPC memory blocks with new scene context
+                try:
+                    update_result = await self.session_manager.update_scene_memory_blocks(
+                        session_id=session_id,
+                        new_scene_number=next_scene_number,
+                        actor=actor,
+                    )
+                    logger.info(
+                        f"  🧠 Updated {update_result['updated_agents']}/{update_result['total_agents']} "
+                        f"agent memories for Scene {next_scene_number}"
+                    )
+                except Exception as e:
+                    # Don't fail the entire scene transition if memory update fails
+                    logger.error(f"  ⚠️ Failed to update scene memories: {e}", exc_info=True)
+            
             # Step 10: Return response
             character_full_name = self._get_character_name(
-                request.target_character,
+                target_character_lower,
                 story.characters,
             )
             
             response = StoryDialogueResponse(
-                character_id=request.target_character,
+                character_id=target_character_lower,
                 character_name=character_full_name,
                 dialogue_text=character_response,
                 emotion=emotion,
