@@ -1362,7 +1362,7 @@ class SessionManager:
         if not session:
             raise ValueError(f"Session '{session_id}' not found")
         
-        story = await self.story_manager.get_story_by_id(session.story_id, actor)
+        story = await self.story_manager.get_story(session.story_id, actor)
         if not story:
             raise ValueError(f"Story '{session.story_id}' not found")
         
@@ -1396,7 +1396,11 @@ class SessionManager:
             """Update single agent's scene memory. Returns result dict."""
             try:
                 # Get agent to find current_scene block ID
-                agent = await self.agent_manager.get_agent_by_id_async(agent_id, actor)
+                agent = await self.agent_manager.get_agent_by_id_async(
+                    agent_id=agent_id,
+                    actor=actor,
+                    include_relationships=["memory"]  # CRITICAL: Load memory blocks!
+                )
                 
                 # Find current_scene block
                 scene_block = None

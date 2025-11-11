@@ -61,7 +61,7 @@ jobs:
         LETTA_SERVER_PASS: test_server_token
         LETTA_SERVER_URL: http://localhost:8283
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        PYTHONPATH: ${{ github.workspace }}:${{ env.PYTHONPATH }}
+        PYTHONPATH: ${{ github.workspace }}/letta:${{ env.PYTHONPATH }}
       run: |
         poetry run pytest -s tests/test_client.py
 #        poetry run pytest -s tests/test_client_legacy.py
