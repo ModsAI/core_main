@@ -448,3 +448,26 @@ class StoryDetailResponse(BaseModel):
 
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Story metadata")
+
+
+class StoryListItem(BaseModel):
+    """Individual story item in list response"""
+
+    story_id: str = Field(..., description="Story identifier")
+    title: str = Field(..., description="Story title")
+    description: Optional[str] = Field(None, description="Story description")
+    scenes_count: int = Field(..., description="Number of scenes in the story")
+    characters_count: int = Field(..., description="Number of characters in the story")
+    estimated_duration: str = Field(..., description="Estimated playthrough time (e.g., '45 min')")
+    created_at: datetime = Field(..., description="Story creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
+
+class StoryListResponse(BaseModel):
+    """Response for GET /v1/story/list"""
+
+    stories: List[StoryListItem] = Field(..., description="List of stories")
+    total: int = Field(..., description="Total number of stories")
+    page: int = Field(1, description="Current page number")
+    page_size: int = Field(50, description="Items per page")

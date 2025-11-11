@@ -8,7 +8,7 @@ Converts TypeScript story JSON to our internal format.
 import json
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -248,6 +248,87 @@ class StoryManager:
         except Exception as e:
             logger.error(f"❌ Failed to delete story {story_id}: {e}", exc_info=True)
             return False
+
+    async def list_stories(
+        self,
+        actor: User,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> Tuple[List[Dict], int]:
+        """
+        List all stories with metadata.
+        
+        Args:
+            actor: User requesting the list
+            page: Page number (1-indexed)
+            page_size: Items per page
+            
+        Returns:
+            Tuple of (story_list, total_count)
+        """
+        logger.debug(f"📋 Listing stories (page={page}, page_size={page_size})")
+        
+        try:
+            async with db_registry.async_session() as session:
+                async with session.begin():
+                    # Count total stories for this organization
+                    from sqlalchemy import func
+                    count_query = select(func.count(StoryORM.id)).where(
+                        StoryORM.organization_id == actor.organization_id,
+                    )
+                    count_result = await session.execute(count_query)
+                    total = count_result.scalar() or 0
+                    
+                    # Query stories with pagination
+                    offset = (page - 1) * page_size
+                    query = (
+                        select(StoryORM)
+                        .where(StoryORM.organization_id == actor.organization_id)
+                        .order_by(StoryORM.created_at.desc())
+                        .limit(page_size)
+                        .offset(offset)
+                    )
+                    result = await session.execute(query)
+                    story_orms = result.scalars().all()
+                    
+                    # Format stories with metadata
+                    stories = []
+                    for story_orm in story_orms:
+                        # Calculate counts from stored JSON
+                        scenes_count = len(story_orm.scenes_json.get("scenes", []))
+                        characters_count = len(story_orm.story_json.get("characters", []))
+                        
+                        # Estimate duration (5 minutes per scene as a heuristic)
+                        estimated_minutes = scenes_count * 5
+                        if estimated_minutes < 60:
+                            estimated_duration = f"{estimated_minutes} min"
+                        else:
+                            hours = estimated_minutes // 60
+                            remaining_minutes = estimated_minutes % 60
+                            if remaining_minutes > 0:
+                                estimated_duration = f"{hours}h {remaining_minutes}m"
+                            else:
+                                estimated_duration = f"{hours}h"
+                        
+                        story_item = {
+                            "story_id": story_orm.story_id,
+                            "title": story_orm.title,
+                            "description": story_orm.description,
+                            "scenes_count": scenes_count,
+                            "characters_count": characters_count,
+                            "estimated_duration": estimated_duration,
+                            "created_at": story_orm.created_at,
+                            "updated_at": story_orm.updated_at,
+                            "metadata": story_orm.story_metadata or {},
+                        }
+                        stories.append(story_item)
+                    
+                    logger.info(f"✅ Found {len(stories)} stories (total: {total})")
+                    return stories, total
+        
+        except Exception as e:
+            logger.error(f"❌ Failed to list stories: {e}", exc_info=True)
+            raise Exception(f"Failed to list stories: {str(e)}") from e
 
     def _process_characters(self, characters: List[StoryCharacter]) -> List[StoryCharacter]:
         """

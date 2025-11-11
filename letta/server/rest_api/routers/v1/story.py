@@ -27,6 +27,8 @@ from letta.schemas.story import (
     StoryDialogueRequest,
     StoryDialogueResponse,
     StoryError,
+    StoryListItem,
+    StoryListResponse,
     StoryUpload,
     StoryUploadResponse,
 )
@@ -181,6 +183,76 @@ async def upload_story(
                     "Try again in a moment",
                 ],
             },
+        )
+
+
+@router.get("/list", response_model=StoryListResponse)
+async def list_stories(
+    page: int = 1,
+    page_size: int = 50,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    List all available stories with metadata.
+    
+    Returns a paginated list of stories for story selection menus.
+    Includes scene count, character count, and estimated duration.
+    
+    Query Parameters:
+    - page: Page number (default: 1)
+    - page_size: Items per page (default: 50, max: 100)
+    
+    Returns:
+    - List of stories with metadata
+    - Total count for pagination
+    """
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    
+    try:
+        logger.info(f"📋 Listing stories (user={actor_id}, page={page}, page_size={page_size})")
+        
+        # Validate pagination parameters
+        if page < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Page number must be >= 1"
+            )
+        if page_size < 1 or page_size > 100:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Page size must be between 1 and 100"
+            )
+        
+        # Get story manager
+        story_manager = StoryManager()
+        
+        # List stories
+        stories, total = await story_manager.list_stories(
+            actor=actor,
+            page=page,
+            page_size=page_size,
+        )
+        
+        # Convert to Pydantic models
+        story_items = [StoryListItem(**story) for story in stories]
+        
+        logger.info(f"✅ Returning {len(story_items)} stories (total: {total})")
+        
+        return StoryListResponse(
+            stories=story_items,
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to list stories: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list stories: {str(e)}",
         )
 
 
