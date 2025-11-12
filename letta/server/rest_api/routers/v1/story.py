@@ -1082,15 +1082,33 @@ async def advance_story(
                         session_id=session_id,
                     )
                 else:
-                    # Really at the end
-                    logger.info(f"  ✓ Story is complete")
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "error": "STORY_COMPLETE",
-                            "message": "Story has ended. No more instructions to advance to.",
-                            "suggestions": ["Story is complete", "Can restart session with /restart"],
-                        },
+                    # ✅ FIX: Last scene complete - transition to "end" state
+                    # This is Kon's issue: Core must send type: "end" instruction
+                    logger.info(f"  🏁 Last scene complete - transitioning to story end")
+                    
+                    # Increment scene number to trigger "story complete" state
+                    session.state.current_scene_number = current_scene + 1
+                    
+                    # Save state with story complete
+                    state_dict = session.state.model_dump(mode="json") if hasattr(session.state, "model_dump") else session.state.dict()
+                    async with db_registry.async_session() as db_session:
+                        async with db_session.begin():
+                            from sqlalchemy import update
+                            from letta.orm.story import StorySession as StorySessionORM
+                            stmt = update(StorySessionORM).where(StorySessionORM.session_id == session_id).values(state=state_dict)
+                            await db_session.execute(stmt)
+                    
+                    # Get "end" instruction (scene_number > len(scenes) triggers this)
+                    next_instruction = session_manager._get_next_instruction(story, session.state)
+                    logger.info(f"  ✅ Story complete - returning type: 'end'")
+                    
+                    return AdvanceStoryResponse(
+                        success=True,
+                        advanced_from=f"scene-{current_scene}",
+                        beat_type="story_complete",
+                        message="Story has ended",
+                        next_instruction=next_instruction,
+                        session_id=session_id,
                     )
 
             # Mark beat as completed based on type
