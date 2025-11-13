@@ -7,7 +7,7 @@ Manages character agents and session state.
 
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, delete, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -117,11 +117,26 @@ class SessionManager:
             # Build character relationships (only for characters with character_id)
             character_relationships = {char.character_id: 0.0 for char in story.characters if char.character_id is not None}
 
+            # Initialize relationship system (NEW - for multi-track relationships)
+            relationship_points = {}
+            relationship_levels = {}
+            
+            if story.relationships:
+                for rel in story.relationships:
+                    rel_id = rel.relationship_id
+                    relationship_points[rel_id] = rel.starting_points
+                    # Calculate starting level from starting points
+                    level = rel.starting_points // rel.points_per_level if rel.points_per_level > 0 else 0
+                    relationship_levels[rel_id] = min(level, rel.max_levels)
+                    logger.debug(f"  💝 Initialized relationship {rel_id}: {rel.starting_points} points, level {level}")
+
             initial_state = SessionState(
                 current_scene_number=1,  # Start at scene 1
                 current_instruction_index=0,  # Start at first instruction
                 completed_dialogue_beats=[],
-                character_relationships=character_relationships,
+                character_relationships=character_relationships,  # Legacy - kept for backwards compatibility
+                relationship_points=relationship_points,  # NEW - multi-track relationships
+                relationship_levels=relationship_levels,  # NEW - multi-track relationships
                 player_choices=[],
                 variables={},
             )
@@ -1230,6 +1245,108 @@ class SessionManager:
             scenes=story.scenes,
             total_scenes=len(story.scenes),
             metadata=story.metadata,
+        )
+
+    def apply_relationship_effects(
+        self,
+        session_state: SessionState,
+        story: "Story",
+        choice_id: int,
+        current_instruction: Dict[str, Any],
+    ) -> None:
+        """
+        Apply relationship effects from a player choice.
+        
+        Modifies session_state in place by updating relationship_points and relationship_levels.
+        
+        Args:
+            session_state: Current session state (will be modified)
+            story: Story with relationship definitions
+            choice_id: ID of the choice that was selected
+            current_instruction: Current instruction dict containing choices
+            
+        Raises:
+            ValueError: If choice not found or invalid relationship reference
+        """
+        if not story.relationships:
+            logger.debug("  ℹ️ Story has no relationships defined, skipping effect application")
+            return
+        
+        # Extract choices from instruction
+        choices = current_instruction.get("choices")
+        if not choices:
+            logger.debug("  ℹ️ Current instruction has no choices")
+            return
+        
+        # Find the selected choice
+        from letta.schemas.story import StoryChoice
+        
+        selected_choice = None
+        for choice_data in choices:
+            # Handle both dict and StoryChoice objects
+            if isinstance(choice_data, dict):
+                if choice_data.get("id") == choice_id:
+                    # Parse as StoryChoice to get relationship_effects
+                    selected_choice = StoryChoice(**choice_data)
+                    break
+            elif isinstance(choice_data, StoryChoice):
+                if choice_data.id == choice_id:
+                    selected_choice = choice_data
+                    break
+        
+        if not selected_choice:
+            logger.warning(f"  ⚠️ Choice {choice_id} not found in current instruction")
+            return
+        
+        if not selected_choice.relationship_effects:
+            logger.debug(f"  ℹ️ Choice {choice_id} has no relationship effects")
+            return
+        
+        # Build relationship lookup: (character, type) -> relationship_def
+        rel_lookup = {(rel.character, rel.type): rel for rel in story.relationships}
+        
+        # Apply each effect
+        for effect in selected_choice.relationship_effects:
+            # Find relationship definition
+            rel_def = rel_lookup.get((effect.character, effect.type))
+            if not rel_def:
+                logger.warning(
+                    f"  ⚠️ Unknown relationship in effect: character='{effect.character}', type='{effect.type}'"
+                )
+                continue
+            
+            rel_id = rel_def.relationship_id
+            
+            # Parse effect string ('+10', '-5', etc.)
+            try:
+                change = int(effect.effect)
+            except ValueError:
+                logger.warning(f"  ⚠️ Invalid effect value: '{effect.effect}' (expected '+10' or '-5')")
+                continue
+            
+            # Update points
+            current_points = session_state.relationship_points.get(rel_id, rel_def.starting_points)
+            new_points = max(0, current_points + change)  # Don't go below 0
+            session_state.relationship_points[rel_id] = new_points
+            
+            # Recalculate level
+            if rel_def.points_per_level > 0:
+                new_level = new_points // rel_def.points_per_level
+                new_level = min(new_level, rel_def.max_levels)  # Cap at max
+                new_level = max(new_level, 0)  # Floor at 0
+            else:
+                new_level = 0
+            
+            old_level = session_state.relationship_levels.get(rel_id, 0)
+            session_state.relationship_levels[rel_id] = new_level
+            
+            # Log the change
+            level_change = ""
+            if new_level != old_level:
+                level_change = f" (level {old_level} → {new_level})"
+            
+            logger.info(
+                f"  💝 Relationship '{rel_id}': {current_points} → {new_points} points{level_change}"
         )
 
     async def update_session_state_with_version(

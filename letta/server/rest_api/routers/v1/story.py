@@ -123,16 +123,55 @@ async def upload_story(
         story_manager = StoryManager()
         
         # If overwrite=true, delete existing story first
+        sessions_deleted = 0
         if overwrite:
             story_id = f"story-{story.id}"
             existing = await story_manager.get_story(story_id, actor)
             if existing:
                 logger.info(f"  🔄 Overwrite mode: Deleting existing story {story_id}")
-                await story_manager.delete_story(story_id, actor)
+                
+                # Count sessions before deleting
+                from sqlalchemy import select, func
+                from letta.orm.story import StorySession as StorySessionORM
+                async with db_registry.async_session() as count_session:
+                    count_stmt = select(func.count(StorySessionORM.id)).where(
+                        StorySessionORM.story_id == story_id,
+                        StorySessionORM.organization_id == actor.organization_id,
+                    )
+                    count_result = await count_session.execute(count_stmt)
+                    sessions_deleted = count_result.scalar() or 0
+                
+                if sessions_deleted > 0:
+                    logger.warning(
+                        f"  ⚠️ IMPORTANT: {sessions_deleted} existing session(s) will be deleted "
+                        f"when story '{story_id}' is overwritten!"
+                    )
+                
+                # Delete story (CASCADE will delete sessions automatically)
+                deleted = await story_manager.delete_story(story_id, actor)
+                
+                if deleted:
+                    logger.info(f"  ✅ Story deleted: {story_id} ({sessions_deleted} sessions invalidated)")
+                else:
+                    logger.error(f"  ❌ Failed to delete story: {story_id}")
+            else:
+                logger.info(f"  ℹ️ No existing story found for {story_id}, proceeding with fresh upload")
         
         response = await story_manager.upload_story(story, actor)
         
-        logger.info(f"✅ Story uploaded: {response.story_id}")
+        # Add session invalidation warning to response if sessions were deleted
+        if sessions_deleted > 0:
+            response.instructions.insert(0, 
+                f"⚠️ IMPORTANT: {sessions_deleted} existing session(s) were invalidated during overwrite"
+            )
+            response.instructions.insert(1,
+                "Any old session IDs are now invalid - you MUST start a NEW session"
+            )
+            response.instructions.insert(2,
+                "Do NOT reuse old session IDs after overwrite - they have been deleted"
+            )
+        
+        logger.info(f"✅ Story uploaded: {response.story_id} (overwrite={overwrite}, sessions_deleted={sessions_deleted})")
         return response
     
     except ValueError as e:
@@ -774,6 +813,14 @@ async def select_choice(
             "timestamp": datetime.now().isoformat(),
         }
         session.state.player_choices.append(choice_record)
+
+        # NEW: Apply relationship effects from the choice
+        session_manager.apply_relationship_effects(
+            session_state=session.state,
+            story=story,
+            choice_id=request.choice_id,
+            current_instruction=current_beat,
+        )
 
         # FIX: Mark the current beat as completed (this was missing!)
         if current_beat and current_beat.get("beat_id"):
@@ -1694,6 +1741,107 @@ async def get_story_details(
             detail={
                 "error": "STORY_RETRIEVAL_FAILED",
                 "message": f"Failed to retrieve story: {error_msg}",
+            },
+        )
+
+
+@router.get("/sessions/{session_id}/validate")
+async def validate_session(
+    session_id: str,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Validate if a session still exists and is active.
+    
+    **Purpose:**
+    This endpoint helps clients check if a session ID is still valid.
+    Sessions can become invalid if:
+    - The story was re-uploaded with ?overwrite=true
+    - The session was explicitly deleted
+    - The session expired
+    
+    **Use Case:**
+    - After story upload with overwrite=true
+    - Before resuming a cached session
+    - For error recovery
+    
+    **Example Request:**
+    ```
+    GET /api/v1/story/sessions/session-abc-123/validate
+    ```
+    
+    **Example Response (Valid):**
+    ```json
+    {
+        "valid": true,
+        "session_id": "session-abc-123",
+        "story_id": "story-1001",
+        "status": "active",
+        "created_at": "2025-11-13T10:00:00Z"
+    }
+    ```
+    
+    **Example Response (Invalid):**
+    ```json
+    {
+        "valid": false,
+        "session_id": "session-abc-123",
+        "reason": "Session not found (may have been deleted during story overwrite)",
+        "suggestions": [
+            "Start a new session with POST /v1/story/sessions/start",
+            "Do not reuse old session IDs after story overwrite"
+        ]
+    }
+    ```
+    
+    **Returns:**
+    - Validation status
+    - Session metadata if valid
+    - Reason and suggestions if invalid
+    """
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"🔍 Session validation request: {session_id} (user: {actor.id})")
+    
+    try:
+        session_manager = SessionManager()
+        session = await session_manager._get_session_by_id(session_id, actor)
+        
+        if not session:
+            logger.warning(f"  ❌ Session not found: {session_id}")
+            return JSONResponse(
+                status_code=200,  # 200 for validation endpoint, not 404
+                content={
+                    "valid": False,
+                    "session_id": session_id,
+                    "reason": "Session not found (may have been deleted during story overwrite)",
+                    "suggestions": [
+                        "Start a new session with POST /v1/story/sessions/start",
+                        "Do not reuse old session IDs after story overwrite",
+                        "Check if story was re-uploaded with ?overwrite=true",
+                    ],
+                },
+            )
+        
+        logger.info(f"  ✅ Session is valid: {session_id}")
+        return {
+            "valid": True,
+            "session_id": session.session_id,
+            "story_id": session.story_id,
+            "status": session.status,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+        }
+    
+    except Exception as e:
+        logger.error(f"❌ Session validation error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "valid": False,
+                "session_id": session_id,
+                "reason": f"Validation error: {str(e)}",
+                "suggestions": ["Check server logs", "Try again"],
             },
         )
 

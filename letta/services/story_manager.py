@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from letta.log import get_logger
 from letta.orm.story import Story as StoryORM
-from letta.schemas.story import Scene, Story, StoryCharacter, StoryInstruction, StoryUpload, StoryUploadResponse
+from letta.schemas.story import Scene, Story, StoryCharacter, StoryCharacterRelationship, StoryInstruction, StoryUpload, StoryUploadResponse
 from letta.schemas.user import User
 from letta.server.db import db_registry
 
@@ -74,11 +74,19 @@ class StoryManager:
             characters = self._process_characters(story_upload.characters)
             logger.debug(f"✅ Processed {len(characters)} characters")
             
-            # Step 3: Parse instructions into scenes
+            # Step 3: Process relationships (add relationship_id, validate)
+            relationships = self._process_relationships(story_upload.relationships, characters)
+            if relationships:
+                logger.debug(f"✅ Processed {len(relationships)} relationships")
+            
+            # Step 4: Validate relationship effects in choices
+            self._validate_relationship_effects(story_upload.instructions, relationships)
+            
+            # Step 5: Parse instructions into scenes
             scenes = self._parse_scenes(story_upload.instructions, characters)
             logger.debug(f"✅ Parsed {len(scenes)} scenes")
             
-            # Step 4: Validate scene structure
+            # Step 6: Validate scene structure
             self._validate_scenes(scenes)
             
             # Step 5: Store in database
@@ -94,9 +102,10 @@ class StoryManager:
                         raise IntegrityError(f"Story ID '{story_id}' already exists", None, None)
                     
                     # Create ORM object
-                    # Store processed story JSON with character_id populated
+                    # Store processed story JSON with character_id and relationship_id populated
                     processed_story_json = story_upload.dict()
                     processed_story_json["characters"] = [char.dict() for char in characters]
+                    processed_story_json["relationships"] = [rel.dict() for rel in relationships] if relationships else []
                     
                     # DEBUG: Check scenes before saving
                     scenes_dicts = [scene.dict() for scene in scenes]
@@ -110,10 +119,11 @@ class StoryManager:
                         story_id=story_id,
                         title=story_upload.title,
                         description=story_upload.description,
-                        story_json=processed_story_json,  # Processed JSON with character_id
+                        story_json=processed_story_json,  # Processed JSON with character_id and relationship_id
                         scenes_json={"scenes": scenes_dicts},  # Processed scenes
                         story_metadata={
                             "character_count": len(characters),
+                            "relationship_count": len(relationships),
                             "scene_count": len(scenes),
                             "instruction_count": len(story_upload.instructions),
                             "tags": story_upload.tags or [],
@@ -193,11 +203,17 @@ class StoryManager:
                     scenes = [Scene(**scene) for scene in story_orm.scenes_json["scenes"]]
                     characters = [StoryCharacter(**char) for char in story_orm.story_json["characters"]]
                     
+                    # Parse relationships (if present)
+                    relationships = None
+                    if "relationships" in story_orm.story_json and story_orm.story_json["relationships"]:
+                        relationships = [StoryCharacterRelationship(**rel) for rel in story_orm.story_json["relationships"]]
+                    
                     story = Story(
                         story_id=story_orm.story_id,
                         title=story_orm.title,
                         description=story_orm.description,
                         characters=characters,
+                        relationships=relationships,
                         scenes=scenes,
                         metadata=story_orm.story_metadata or {},
                     )
@@ -366,6 +382,113 @@ class StoryManager:
             logger.debug(f"  📝 Character: {char.name} → {char_id}")
         
         return processed
+
+    def _process_relationships(
+        self, relationships: Optional[List[StoryCharacterRelationship]], characters: List[StoryCharacter]
+    ) -> List[StoryCharacterRelationship]:
+        """
+        Process relationships: generate relationship_id, validate character references.
+
+        Args:
+            relationships: Raw relationships from upload
+            characters: Processed characters (with character_id)
+
+        Returns:
+            Processed relationships with IDs
+        """
+        if not relationships:
+            return []
+
+        # Build character name -> character_id mapping
+        char_name_to_id = {char.name: char.character_id for char in characters if char.character_id}
+
+        processed = []
+        seen_ids = set()
+
+        for rel in relationships:
+            # Validate character exists
+            if rel.character not in char_name_to_id:
+                raise ValueError(f"Relationship references unknown character: '{rel.character}'. Available characters: {list(char_name_to_id.keys())}")
+
+            # Generate character_id from character name
+            char_id = char_name_to_id[rel.character]
+
+            # Generate relationship_id: {character_id}-{type}
+            rel_id = f"{char_id}-{rel.type}"
+
+            # Check for duplicates
+            if rel_id in seen_ids:
+                raise ValueError(
+                    f"Duplicate relationship definition: character='{rel.character}', type='{rel.type}'. "
+                    f"Each character can only have one relationship per type."
+                )
+            seen_ids.add(rel_id)
+
+            # Create processed relationship with ID
+            processed_rel = StoryCharacterRelationship(
+                character=rel.character,
+                type=rel.type,
+                points_per_level=rel.points_per_level,
+                max_levels=rel.max_levels,
+                starting_points=rel.starting_points,
+                visual=rel.visual,
+                relationship_id=rel_id,
+            )
+            processed.append(processed_rel)
+
+            logger.debug(f"  💝 Relationship: {rel.character} ({rel.type}) → {rel_id}")
+
+        logger.info(f"✅ Processed {len(processed)} relationship(s)")
+        return processed
+
+    def _validate_relationship_effects(
+        self,
+        instructions: List[StoryInstruction],
+        relationships: List[StoryCharacterRelationship],
+    ) -> None:
+        """
+        Validate that all relationshipEffects in choices reference valid relationships.
+
+        Args:
+            instructions: Story instructions
+            relationships: Processed relationships
+
+        Raises:
+            ValueError: If a choice references an invalid relationship
+        """
+        if not relationships:
+            # If no relationships defined, ensure no choices have relationshipEffects
+            for instr in instructions:
+                if instr.choices:
+                    for choice in instr.choices:
+                        if choice.relationship_effects:
+                            raise ValueError(
+                                f"Choice {choice.id} has relationshipEffects, but story has no relationships defined. "
+                                f"Add relationships to the story's 'relationships' array."
+                            )
+            return
+
+        # Build lookup of valid (character, type) pairs
+        valid_relationships = {(rel.character, rel.type) for rel in relationships}
+
+        for instr in instructions:
+            if not instr.choices:
+                continue
+
+            for choice in instr.choices:
+                if not choice.relationship_effects:
+                    continue
+
+                for effect in choice.relationship_effects:
+                    if (effect.character, effect.type) not in valid_relationships:
+                        raise ValueError(
+                            f"Invalid relationship effect in choice {choice.id}: "
+                            f"No relationship defined for character '{effect.character}' with type '{effect.type}'. "
+                            f"Available relationships: {valid_relationships}. "
+                            f"Add this relationship to the story's 'relationships' array."
+                        )
+
+        logger.debug("✅ All relationshipEffects validated successfully")
 
     def _parse_scenes(
         self,

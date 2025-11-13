@@ -83,7 +83,57 @@ class StoryInstruction(BaseModel):
     music_cue: Optional[str] = Field(None, description="Music cue or track name")
 
     # Multiple choice support (for Unity choice selections)
-    choices: Optional[List[Dict[str, Any]]] = Field(None, description="Multiple choice options (e.g., [{'id': 1, 'text': 'Option 1'}])")
+    choices: Optional[List["StoryChoice"]] = Field(None, description="Multiple choice options with optional relationship effects")
+
+
+# ============================================================
+# Relationship System Models (for Kon's Unity Integration)
+# ============================================================
+
+
+class RelationshipVisual(BaseModel):
+    """Visual styling for relationship display in Unity"""
+
+    color: str = Field(..., description="Hex color code (e.g., '#3498db' for blue)")
+    icon: str = Field(..., description="Icon identifier (e.g., 'handshake', 'heart', 'star')")
+
+
+class StoryCharacterRelationship(BaseModel):
+    """Character relationship progression system - tracks multiple relationship types per character"""
+
+    character: str = Field(..., description="Target character name (e.g., 'Tatsuya')")
+    type: Literal["friendship", "romance", "rivalry", "mentorship"] = Field(..., description="Relationship type")
+    points_per_level: int = Field(..., alias="pointsPerLevel", description="Points needed per level")
+    max_levels: int = Field(..., alias="maxLevels", description="Maximum relationship level")
+    starting_points: int = Field(..., alias="startingPoints", description="Initial relationship points")
+    visual: RelationshipVisual = Field(..., description="Visual styling for UI display")
+
+    # Generated field (auto-generated during story processing)
+    relationship_id: Optional[str] = Field(None, description="Auto-generated ID: {character_id}-{type}")
+
+    class Config:
+        populate_by_name = True  # Allow both snake_case and camelCase
+
+
+class RelationshipEffect(BaseModel):
+    """Effect of a player choice on a character relationship"""
+
+    character: str = Field(..., description="Target character name (e.g., 'Tatsuya')")
+    type: Literal["friendship", "romance", "rivalry", "mentorship"] = Field(..., description="Relationship type")
+    effect: str = Field(..., description="Point change as string (e.g., '+10', '-5')")
+
+
+class StoryChoice(BaseModel):
+    """Player choice option with optional relationship effects"""
+
+    id: int = Field(..., description="Choice identifier (unique within instruction)")
+    text: str = Field(..., description="Choice text displayed to player")
+    relationship_effects: Optional[List[RelationshipEffect]] = Field(
+        None, alias="relationshipEffects", description="Effects on character relationships"
+    )
+
+    class Config:
+        populate_by_name = True
 
 
 class StoryUpload(BaseModel):
@@ -92,6 +142,7 @@ class StoryUpload(BaseModel):
     id: int = Field(..., description="Story ID")
     title: str = Field(..., description="Story title")
     characters: List[StoryCharacter] = Field(..., description="Story characters")
+    relationships: Optional[List[StoryCharacterRelationship]] = Field(None, description="Character relationships (optional)")
     instructions: List[StoryInstruction] = Field(..., description="Story instructions")
 
     # Optional metadata
@@ -127,6 +178,7 @@ class Story(BaseModel):
     title: str = Field(..., description="Story title")
     description: Optional[str] = Field(None, description="Story description")
     characters: List[StoryCharacter] = Field(..., description="Story characters")
+    relationships: Optional[List[StoryCharacterRelationship]] = Field(None, description="Character relationships")
     scenes: List[Scene] = Field(..., description="Story scenes")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
@@ -154,7 +206,17 @@ class SessionState(BaseModel):
     completed_narration_beats: List[str] = Field(default_factory=list, description="Completed narration checkpoint IDs (Q5)")
     completed_action_beats: List[str] = Field(default_factory=list, description="Completed action checkpoint IDs (Q5)")
 
-    character_relationships: Dict[str, float] = Field(default_factory=dict, description="Character relationship scores")
+    # Legacy field - kept for backwards compatibility with existing sessions
+    character_relationships: Dict[str, float] = Field(default_factory=dict, description="DEPRECATED: Use relationship_points/relationship_levels instead")
+
+    # New relationship system - tracks multiple relationship types per character
+    relationship_points: Dict[str, int] = Field(
+        default_factory=dict, description="Relationship ID -> current points (e.g., {'tatsuya-friendship': 130})"
+    )
+    relationship_levels: Dict[str, int] = Field(
+        default_factory=dict, description="Relationship ID -> current level (e.g., {'tatsuya-friendship': 1})"
+    )
+
     player_choices: List[Dict[str, Any]] = Field(default_factory=list, description="Choices made by player")
     variables: Dict[str, Any] = Field(default_factory=dict, description="Story variables")
 
@@ -471,3 +533,7 @@ class StoryListResponse(BaseModel):
     total: int = Field(..., description="Total number of stories")
     page: int = Field(1, description="Current page number")
     page_size: int = Field(50, description="Items per page")
+
+
+# Resolve forward references for StoryInstruction.choices
+StoryInstruction.model_rebuild()
