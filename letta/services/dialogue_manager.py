@@ -411,11 +411,16 @@ class DialogueManager:
         
         prompt_parts.extend([
             "",
-            "TONE:",
+            "TONE & RELATIONSHIP AWARENESS:",
             "- Natural and conversational",
             "- Stay in character",
+            "- **IMPORTANT: Check your RELATIONSHIP STATUS memory block**",
+            "- Adjust your tone based on your relationship level with the player",
+            "- Higher friendship = warmer, more familiar, trusting",
+            "- Higher romance = more caring, flirty, intimate",
+            "- Lower levels = more formal, distant, cautious",
             "- Don't break the fourth wall",
-            "- Don't mention 'the script' or 'the story'",
+            "- Don't mention 'the script', 'the story', or 'relationship points'",
             "",
             "Now, respond to the player:",
         ])

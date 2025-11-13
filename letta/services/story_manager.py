@@ -529,7 +529,7 @@ class StoryManager:
                     scene_number=scene_number,
                     title=instruction.title or f"Scene {scene_number}",
                     location=instruction.setting or "Unknown location",
-                    instructions=[],
+                    instructions=[instruction],  # FIX: Include the setting instruction itself!
                     characters=[],
                     dialogue_beats=[],
                 )

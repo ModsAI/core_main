@@ -106,12 +106,7 @@ class SessionManager:
                 )
                 await self._delete_session_internal(existing_session.session_id, actor)
 
-            # Step 3: Create agents for all characters
-            logger.info(f"🤖 Creating agents for {len(story.characters)} characters...")
-            character_agents = await self._create_character_agents(story, actor)
-            logger.info(f"✅ Created {len(character_agents)} character agents")
-
-            # Step 4: Initialize session state
+            # Step 3: Initialize session state FIRST (needed for agent memory)
             session_id = f"session-{uuid.uuid4()}"
 
             # Build character relationships (only for characters with character_id)
@@ -140,6 +135,13 @@ class SessionManager:
                 player_choices=[],
                 variables={},
             )
+            
+            logger.debug(f"✅ Session state initialized with {len(relationship_points)} relationships")
+
+            # Step 4: Create agents with relationship context
+            logger.info(f"🤖 Creating agents for {len(story.characters)} characters...")
+            character_agents = await self._create_character_agents(story, actor, initial_state)
+            logger.info(f"✅ Created {len(character_agents)} character agents with relationship awareness")
 
             # Step 5: Store in database
             async with db_registry.async_session() as session:
@@ -355,6 +357,7 @@ class SessionManager:
         self,
         story: Story,
         actor: User,
+        session_state: SessionState,  # NEW: Pass session state for relationship context
     ) -> Dict[str, str]:
         """
         Create Letta agents for story characters.
@@ -401,7 +404,10 @@ class SessionManager:
                     # Fallback if no scenes exist
                     scene_value = "=== CURRENT SCENE ===\nThe story is about to begin..."
 
-                # Create memory blocks
+                # Block 4: relationships - Current relationship status (NEW!)
+                relationships_value = self._build_relationships_context(story, session_state, character)
+
+                # Create memory blocks (NOW WITH 4TH BLOCK!)
                 memory_blocks = [
                     CreateBlock(
                         label="persona",
@@ -418,9 +424,14 @@ class SessionManager:
                         value=scene_value,
                         limit=1000,
                     ),
+                    CreateBlock(
+                        label="relationships",  # NEW: 4th memory block for relationship awareness!
+                        value=relationships_value,
+                        limit=1500,  # Enough space for multiple relationships
+                    ),
                 ]
 
-                logger.debug(f"    📝 Created {len(memory_blocks)} core memory blocks for {character.name}")
+                logger.debug(f"    📝 Created {len(memory_blocks)} core memory blocks for {character.name} (including relationships)")
 
                 # ============================================================
                 # Create Agent with Core Memory Blocks
@@ -495,6 +506,123 @@ class SessionManager:
             scene_list += f" +{len(story.scenes) - 5} more"
 
         return f"STORY: {story.title}\nCAST: {cast_list}\nSCENES: {scene_list}"
+
+    def _build_relationships_context(
+        self, 
+        story: Story, 
+        session_state: SessionState,
+        current_character: StoryCharacter
+    ) -> str:
+        """
+        Build relationship status context for AI agent memory.
+        
+        This block allows the AI to be aware of relationship levels and adjust
+        dialogue/behavior accordingly. Updated in real-time as relationships change.
+        
+        Args:
+            story: Story with relationship definitions
+            session_state: Current session state with relationship values
+            current_character: The character this agent represents
+            
+        Returns:
+            Formatted relationship context string
+        """
+        if not story.relationships:
+            return "=== RELATIONSHIPS ===\nNo relationship tracking for this story."
+        
+        # Find main character name for context
+        main_character = next((char for char in story.characters if char.is_main_character), None)
+        player_name = main_character.name if main_character else "the player"
+        
+        context_parts = [
+            "=== RELATIONSHIP STATUS ===",
+            f"Your relationship with {player_name}:",
+            ""
+        ]
+        
+        # Find relationships involving this character
+        char_relationships = [
+            rel for rel in story.relationships 
+            if rel.character.lower() == current_character.name.lower()
+        ]
+        
+        if not char_relationships:
+            context_parts.append(f"No tracked relationships for {current_character.name}")
+            return "\n".join(context_parts)
+        
+        # Add each relationship with current status
+        for rel in char_relationships:
+            rel_id = rel.relationship_id
+            current_points = session_state.relationship_points.get(rel_id, rel.starting_points)
+            current_level = session_state.relationship_levels.get(rel_id, 0)
+            
+            # Calculate progress to next level
+            if rel.points_per_level > 0:
+                points_in_level = current_points % rel.points_per_level
+                progress_pct = int((points_in_level / rel.points_per_level) * 100)
+            else:
+                progress_pct = 0
+            
+            # Format relationship type nicely
+            rel_type_display = rel.type.capitalize()
+            
+            context_parts.extend([
+                f"• {rel_type_display}:",
+                f"  - Level: {current_level}/{rel.max_levels}",
+                f"  - Points: {current_points} ({progress_pct}% to next level)",
+                f"  - Status: {self._get_relationship_description(rel.type, current_level, rel.max_levels)}",
+                ""
+            ])
+        
+        context_parts.extend([
+            "IMPORTANT:",
+            "- Adjust your tone and familiarity based on relationship level",
+            "- Higher friendship = more casual, warm, trusting",
+            "- Higher romance = more flirty, caring, intimate",
+            "- Lower levels = more formal, cautious, distant",
+            "- Let relationship level naturally influence your responses"
+        ])
+        
+        return "\n".join(context_parts)
+    
+    def _get_relationship_description(self, rel_type: str, level: int, max_levels: int) -> str:
+        """Get human-readable relationship status description."""
+        progress = level / max_levels if max_levels > 0 else 0
+        
+        descriptions = {
+            "friendship": [
+                "Strangers",
+                "Acquaintances", 
+                "Friendly",
+                "Close Friends",
+                "Best Friends"
+            ],
+            "romance": [
+                "No Interest",
+                "Curious",
+                "Attracted",
+                "Dating",
+                "In Love"
+            ],
+            "rivalry": [
+                "Neutral",
+                "Competitive",
+                "Hostile",
+                "Enemies",
+                "Arch-Nemesis"
+            ],
+            "mentorship": [
+                "No Relationship",
+                "Student",
+                "Apprentice",
+                "Protégé",
+                "Master & Student"
+            ]
+        }
+        
+        labels = descriptions.get(rel_type, ["Unknown"] * 5)
+        index = min(int(progress * len(labels)), len(labels) - 1)
+        return labels[index]
 
     def _build_character_persona(self, character: StoryCharacter, story: Story) -> str:
         """
@@ -1142,12 +1270,28 @@ class SessionManager:
         else:
             current_scene = story.scenes[current_scene_num - 1]
 
+        # Get current instruction to extract location
+        current_instruction_index = session.state.current_instruction_index
+        current_instruction = None
+        location = "Unknown location"  # Default fallback
+        
+        if current_instruction_index < len(current_scene.instructions):
+            current_instruction = current_scene.instructions[current_instruction_index]
+            # Extract location from instruction
+            # The field is called 'setting' in StoryInstruction schema, not 'location'
+            if isinstance(current_instruction, dict):
+                location = current_instruction.get("setting") or current_instruction.get("location", "Unknown location")
+            elif hasattr(current_instruction, "setting"):
+                location = current_instruction.setting or "Unknown location"
+            elif hasattr(current_instruction, "location"):
+                location = current_instruction.location or "Unknown location"
+
         # Build current setting info
         current_setting = CurrentSettingInfo(
             scene_id=current_scene.scene_id,
             scene_number=current_scene.scene_number,
             scene_title=current_scene.title,
-            location=current_scene.location,
+            location=location,  # Use location from current instruction
             total_scenes=len(story.scenes),
         )
 
@@ -1247,6 +1391,85 @@ class SessionManager:
             metadata=story.metadata,
         )
 
+    async def update_relationships_memory(
+        self,
+        session_id: str,
+        story: "Story",
+        session_state: SessionState,
+        character_agents: Dict[str, str],
+        actor: User,
+    ) -> None:
+        """
+        Update relationship memory blocks for all character agents.
+        
+        Called after relationship effects are applied to keep AI agents' memory
+        synchronized with actual relationship status.
+        
+        Args:
+            session_id: Session identifier (for logging)
+            story: Story with character definitions
+            session_state: Current session state with updated relationships
+            character_agents: Dict mapping character_id to agent_id
+            actor: User making the request
+        """
+        if not story.relationships:
+            logger.debug(f"  ℹ️ No relationships to update (session: {session_id})")
+            return
+        
+        logger.info(f"  🔄 Updating relationship memory for {len(character_agents)} agents...")
+        
+        from letta.schemas.block import BlockUpdate
+        import asyncio
+        
+        async def update_agent_relationships(char_id: str, agent_id: str, character: StoryCharacter):
+            """Update single agent's relationship memory block."""
+            try:
+                # Get agent with memory blocks
+                agent = await self.agent_manager.get_agent_by_id_async(
+                    agent_id=agent_id,
+                    actor=actor,
+                    include_relationships=["memory"]
+                )
+                
+                # Find relationships memory block
+                relationships_block = None
+                for block in agent.memory.blocks:
+                    if block.label == "relationships":
+                        relationships_block = block
+                        break
+                
+                if not relationships_block:
+                    logger.warning(f"    ⚠️ No relationships block for {char_id} (agent {agent_id})")
+                    return
+                
+                # Build updated relationships context
+                updated_value = self._build_relationships_context(story, session_state, character)
+                
+                # Update block
+                await self.block_manager.update_block_async(
+                    block_id=relationships_block.id,
+                    block_update=BlockUpdate(value=updated_value),
+                    actor=actor,
+                )
+                
+                logger.debug(f"    ✅ Updated relationships for {char_id}")
+                
+            except Exception as e:
+                logger.error(f"    ❌ Failed to update relationships for {char_id}: {e}")
+        
+        # Create character lookup for agent updates
+        char_lookup = {char.character_id: char for char in story.characters if char.character_id}
+        
+        # Update all agents in parallel
+        update_tasks = [
+            update_agent_relationships(char_id, agent_id, char_lookup[char_id])
+            for char_id, agent_id in character_agents.items()
+            if char_id in char_lookup  # Only update if we have character def
+        ]
+        
+        await asyncio.gather(*update_tasks)
+        logger.info(f"  ✅ Relationship memory updated for all agents")
+    
     def apply_relationship_effects(
         self,
         session_state: SessionState,
@@ -1258,6 +1481,9 @@ class SessionManager:
         Apply relationship effects from a player choice.
         
         Modifies session_state in place by updating relationship_points and relationship_levels.
+        
+        NOTE: After calling this, you MUST call update_relationships_memory() to sync
+        the AI agents' memory blocks with the new relationship values.
         
         Args:
             session_state: Current session state (will be modified)
@@ -1326,7 +1552,8 @@ class SessionManager:
             
             # Update points
             current_points = session_state.relationship_points.get(rel_id, rel_def.starting_points)
-            new_points = max(0, current_points + change)  # Don't go below 0
+            max_points = rel_def.max_levels * rel_def.points_per_level  # Calculate maximum points
+            new_points = max(0, min(max_points, current_points + change))  # Floor at 0, cap at max
             session_state.relationship_points[rel_id] = new_points
             
             # Recalculate level

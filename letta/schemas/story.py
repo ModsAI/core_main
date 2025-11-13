@@ -313,6 +313,16 @@ class StoryChoiceResponse(BaseModel):
     message: str = Field(..., description="Status message")
     session_id: str = Field(..., description="Session identifier")
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
+    
+    # NEW: Include updated relationship status after choice
+    relationship_points: Optional[Dict[str, int]] = Field(
+        None, 
+        description="Updated relationship points after choice (e.g., {'tatsuya-friendship': 130})"
+    )
+    relationship_levels: Optional[Dict[str, int]] = Field(
+        None,
+        description="Updated relationship levels after choice (e.g., {'tatsuya-friendship': 1})"
+    )
 
 
 # ============================================================
@@ -448,6 +458,33 @@ class ProgressInfo(BaseModel):
     beats_remaining: List[str] = Field(..., description="List of remaining beat IDs")
     total_beats_in_scene: int = Field(..., description="Total beats in current scene")
     scene_complete: bool = Field(..., description="Is current scene complete")
+
+
+class RelationshipStatusResponse(BaseModel):
+    """
+    Relationship status response for quick queries.
+    
+    Lightweight endpoint for Kon to check relationship status without fetching full state.
+    Use this when Unity needs to:
+    - Show relationship meters/bars in UI
+    - Check relationship thresholds before enabling choices
+    - Update UI after relationship changes
+    """
+    
+    session_id: str = Field(..., description="Session identifier")
+    relationship_points: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Current relationship points (e.g., {'tatsuya-friendship': 130, 'rina-romance': 45})"
+    )
+    relationship_levels: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Current relationship levels (e.g., {'tatsuya-friendship': 1, 'rina-romance': 0})"
+    )
+    relationships_defined: List[str] = Field(
+        default_factory=list,
+        description="List of defined relationship IDs in story (e.g., ['tatsuya-friendship', 'rina-romance'])"
+    )
+    timestamp: datetime = Field(default_factory=datetime.now, description="Query timestamp")
 
 
 class SessionStateResponse(BaseModel):

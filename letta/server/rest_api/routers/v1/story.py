@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from letta.log import get_logger
 from letta.schemas.story import (
     AdvanceStoryResponse,
+    RelationshipStatusResponse,
     SessionCreate,
     SessionRestartResponse,
     SessionResume,
@@ -866,14 +867,26 @@ async def select_choice(
                 },
             )
 
+        # NEW: Update AI agents' relationship memory blocks to keep them synchronized
+        await session_manager.update_relationships_memory(
+            session_id=session_id,
+            story=story,
+            session_state=session.state,
+            character_agents=session.character_agents,
+            actor=actor,
+        )
+
         logger.info(f"✅ Choice selection complete: {request.choice_id}")
 
+        # Include updated relationship status in response (NEW)
         return StoryChoiceResponse(
             success=True,
             choice_id=request.choice_id,
             message="Choice recorded and story advanced",
             session_id=session_id,
             timestamp=datetime.now(),
+            relationship_points=session.state.relationship_points,  # Include updated points
+            relationship_levels=session.state.relationship_levels,  # Include updated levels
         )
 
     except ValueError as e:
@@ -1981,6 +1994,148 @@ async def get_session_state(
             detail={
                 "error": "SESSION_STATE_RETRIEVAL_FAILED",
                 "message": f"Failed to retrieve session state: {error_msg}",
+            },
+        )
+
+
+@router.get("/sessions/{session_id}/relationships", response_model=RelationshipStatusResponse)
+async def get_relationship_status(
+    session_id: str,
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Get current relationship status for a session.
+    
+    **Purpose:**
+    Lightweight endpoint for Kon to quickly query relationship status without
+    fetching the entire session state. Perfect for:
+    - Updating relationship meters/bars in Unity UI
+    - Checking relationship thresholds before showing choices
+    - Polling for relationship changes after dialogue
+    
+    **Use Cases:**
+    - Before showing choices: Check if player has sufficient relationship level
+    - After dialogue: Update UI with new relationship values
+    - Real-time UI: Poll this endpoint to keep meters updated
+    
+    **Example Request:**
+    ```
+    GET /api/v1/story/sessions/session-abc-123/relationships
+    Headers:
+      user_id: your-user-id
+    ```
+    
+    **Example Response:**
+    ```json
+    {
+        "session_id": "session-abc-123",
+        "relationship_points": {
+            "tatsuya-friendship": 130,
+            "tatsuya-romance": 25,
+            "rina-friendship": 60
+        },
+        "relationship_levels": {
+            "tatsuya-friendship": 1,
+            "tatsuya-romance": 0,
+            "rina-friendship": 0
+        },
+        "relationships_defined": [
+            "tatsuya-friendship",
+            "tatsuya-romance",
+            "rina-friendship"
+        ],
+        "timestamp": "2025-11-13T14:30:00Z"
+    }
+    ```
+    
+    **Returns:**
+    - Current relationship points for all relationships
+    - Current relationship levels for all relationships
+    - List of defined relationships in the story
+    - Timestamp of query
+    
+    **Performance:**
+    - Very fast: Only fetches session state (no story structure)
+    - Lightweight: Returns only relationship data
+    - Can be polled frequently without performance impact
+    
+    **Errors:**
+    - 404: Session not found
+    - 500: Database error
+    """
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"💝 Relationship status request: session={session_id} (user: {actor.id})")
+    
+    try:
+        session_manager = SessionManager()
+        
+        # Get session
+        session = await session_manager._get_session_by_id(session_id, actor)
+        if not session:
+            logger.error(f"❌ Session not found: {session_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "SESSION_NOT_FOUND",
+                    "message": f"Session '{session_id}' not found",
+                    "suggestions": [
+                        "Verify session ID is correct",
+                        "Check if session is still active",
+                        "Start a new session with POST /api/v1/story/sessions/start",
+                    ],
+                },
+            )
+        
+        # Get story to find defined relationships
+        story = await session_manager.story_manager.get_story(session.story_id, actor)
+        if not story:
+            logger.error(f"❌ Story not found: {session.story_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "STORY_NOT_FOUND",
+                    "message": f"Story '{session.story_id}' not found",
+                },
+            )
+        
+        # Extract relationship data from session state
+        relationship_points = session.state.relationship_points or {}
+        relationship_levels = session.state.relationship_levels or {}
+        
+        # Get list of defined relationships from story
+        relationships_defined = []
+        if story.relationships:
+            relationships_defined = [rel.relationship_id for rel in story.relationships if rel.relationship_id]
+        
+        logger.info(
+            f"✅ Relationship status retrieved: {session_id} "
+            f"({len(relationship_points)} relationships, {len(relationships_defined)} defined)"
+        )
+        
+        return RelationshipStatusResponse(
+            session_id=session.session_id,
+            relationship_points=relationship_points,
+            relationship_levels=relationship_levels,
+            relationships_defined=relationships_defined,
+        )
+    
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ Error retrieving relationship status: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "RELATIONSHIP_STATUS_RETRIEVAL_FAILED",
+                "message": f"Failed to retrieve relationship status: {error_msg}",
+                "suggestions": [
+                    "Check server logs for details",
+                    "Verify session ID is valid",
+                    "Try again in a moment",
+                ],
             },
         )
 
