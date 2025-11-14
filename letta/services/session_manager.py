@@ -56,6 +56,64 @@ class SessionManager:
         self.block_manager = BlockManager()
         logger.info("🎮 SessionManager initialized")
 
+    # ============================================================
+    # Relationship Array Helper Methods
+    # ============================================================
+
+    @staticmethod
+    def _find_relationship_point(points_array: List, rel_id: str) -> Optional[int]:
+        """Find points value for a relationship ID in array"""
+        for item in points_array:
+            if isinstance(item, dict) and item.get("id") == rel_id:
+                return item.get("points")
+            elif hasattr(item, "id") and item.id == rel_id:
+                return item.points
+        return None
+
+    @staticmethod
+    def _find_relationship_level(levels_array: List, rel_id: str) -> Optional[int]:
+        """Find level value for a relationship ID in array"""
+        for item in levels_array:
+            if isinstance(item, dict) and item.get("id") == rel_id:
+                return item.get("level")
+            elif hasattr(item, "id") and item.id == rel_id:
+                return item.level
+        return None
+
+    @staticmethod
+    def _update_relationship_point(points_array: List, rel_id: str, new_points: int) -> None:
+        """Update or add relationship points in array"""
+        for item in points_array:
+            if (isinstance(item, dict) and item.get("id") == rel_id) or \
+               (hasattr(item, "id") and item.id == rel_id):
+                if isinstance(item, dict):
+                    item["points"] = new_points
+                else:
+                    item.points = new_points
+                return
+        # Not found - add new entry
+        from letta.schemas.story import RelationshipPoint
+        points_array.append(RelationshipPoint(id=rel_id, points=new_points))
+
+    @staticmethod
+    def _update_relationship_level(levels_array: List, rel_id: str, new_level: int) -> None:
+        """Update or add relationship level in array"""
+        for item in levels_array:
+            if (isinstance(item, dict) and item.get("id") == rel_id) or \
+               (hasattr(item, "id") and item.id == rel_id):
+                if isinstance(item, dict):
+                    item["level"] = new_level
+                else:
+                    item.level = new_level
+                return
+        # Not found - add new entry
+        from letta.schemas.story import RelationshipLevel
+        levels_array.append(RelationshipLevel(id=rel_id, level=new_level))
+
+    # ============================================================
+    # Session Lifecycle Methods
+    # ============================================================
+
     async def start_session(
         self,
         session_create: SessionCreate,
@@ -113,17 +171,22 @@ class SessionManager:
             character_relationships = {char.character_id: 0.0 for char in story.characters if char.character_id is not None}
 
             # Initialize relationship system (NEW - for multi-track relationships)
-            relationship_points = {}
-            relationship_levels = {}
+            from letta.schemas.story import RelationshipPoint, RelationshipLevel
+            
+            relationship_points = []
+            relationship_levels = []
             
             if story.relationships:
                 for rel in story.relationships:
                     rel_id = rel.relationship_id
-                    relationship_points[rel_id] = rel.starting_points
+                    starting_points = rel.starting_points
                     # Calculate starting level from starting points
-                    level = rel.starting_points // rel.points_per_level if rel.points_per_level > 0 else 0
-                    relationship_levels[rel_id] = min(level, rel.max_levels)
-                    logger.debug(f"  💝 Initialized relationship {rel_id}: {rel.starting_points} points, level {level}")
+                    level = starting_points // rel.points_per_level if rel.points_per_level > 0 else 0
+                    level = min(level, rel.max_levels)
+                    
+                    relationship_points.append(RelationshipPoint(id=rel_id, points=starting_points))
+                    relationship_levels.append(RelationshipLevel(id=rel_id, level=level))
+                    logger.debug(f"  💝 Initialized relationship {rel_id}: {starting_points} points, level {level}")
 
             initial_state = SessionState(
                 current_scene_number=1,  # Start at scene 1
@@ -553,8 +616,12 @@ class SessionManager:
         # Add each relationship with current status
         for rel in char_relationships:
             rel_id = rel.relationship_id
-            current_points = session_state.relationship_points.get(rel_id, rel.starting_points)
-            current_level = session_state.relationship_levels.get(rel_id, 0)
+            current_points = self._find_relationship_point(session_state.relationship_points, rel_id)
+            if current_points is None:
+                current_points = rel.starting_points
+            current_level = self._find_relationship_level(session_state.relationship_levels, rel_id)
+            if current_level is None:
+                current_level = 0
             
             # Calculate progress to next level
             if rel.points_per_level > 0:
@@ -1332,6 +1399,19 @@ class SessionManager:
             "current_instruction_index": session.state.current_instruction_index,
         }
 
+        # Build nested relationships object for response
+        from letta.schemas.story import SessionStateRelationships
+        
+        relationships_defined = []
+        if story.relationships:
+            relationships_defined = [rel.relationship_id for rel in story.relationships if rel.relationship_id]
+        
+        relationships_obj = SessionStateRelationships(
+            relationship_points=session.state.relationship_points,
+            relationship_levels=session.state.relationship_levels,
+            relationships_defined=relationships_defined
+        )
+
         return SessionStateResponse(
             story_id=story.story_id,
             story_title=story.title,
@@ -1343,6 +1423,7 @@ class SessionManager:
             next_instruction=next_instruction,
             progress=progress,
             state=session.state,  # Q7 FIX: Include raw state for completion tracking
+            relationships=relationships_obj,  # NEW: Nested relationships object
             metadata=metadata,
         )
 
@@ -1550,11 +1631,15 @@ class SessionManager:
                 logger.warning(f"  ⚠️ Invalid effect value: '{effect.effect}' (expected '+10' or '-5')")
                 continue
             
-            # Update points
-            current_points = session_state.relationship_points.get(rel_id, rel_def.starting_points)
+            # Update points (using array helper methods)
+            current_points = self._find_relationship_point(session_state.relationship_points, rel_id)
+            if current_points is None:
+                current_points = rel_def.starting_points
+            
             max_points = rel_def.max_levels * rel_def.points_per_level  # Calculate maximum points
             new_points = max(0, min(max_points, current_points + change))  # Floor at 0, cap at max
-            session_state.relationship_points[rel_id] = new_points
+            
+            self._update_relationship_point(session_state.relationship_points, rel_id, new_points)
             
             # Recalculate level
             if rel_def.points_per_level > 0:
@@ -1564,8 +1649,8 @@ class SessionManager:
             else:
                 new_level = 0
             
-            old_level = session_state.relationship_levels.get(rel_id, 0)
-            session_state.relationship_levels[rel_id] = new_level
+            old_level = self._find_relationship_level(session_state.relationship_levels, rel_id) or 0
+            self._update_relationship_level(session_state.relationship_levels, rel_id, new_level)
             
             # Log the change
             level_change = ""

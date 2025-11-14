@@ -2100,8 +2100,9 @@ async def get_relationship_status(
             )
         
         # Extract relationship data from session state
-        relationship_points = session.state.relationship_points or {}
-        relationship_levels = session.state.relationship_levels or {}
+        # SessionState already has arrays, just pass them through
+        relationship_points = session.state.relationship_points or []
+        relationship_levels = session.state.relationship_levels or []
         
         # Get list of defined relationships from story
         relationships_defined = []

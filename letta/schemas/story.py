@@ -91,6 +91,37 @@ class StoryInstruction(BaseModel):
 # ============================================================
 
 
+class RelationshipPoint(BaseModel):
+    """Single relationship points entry"""
+    
+    id: str = Field(..., description="Relationship ID (e.g., 'tatsuya-friendship')")
+    points: int = Field(..., description="Current points for this relationship")
+
+
+class RelationshipLevel(BaseModel):
+    """Single relationship level entry"""
+    
+    id: str = Field(..., description="Relationship ID (e.g., 'tatsuya-friendship')")
+    level: int = Field(..., description="Current level for this relationship")
+
+
+class SessionStateRelationships(BaseModel):
+    """Nested relationships object for SessionStateResponse"""
+    
+    relationship_points: List[RelationshipPoint] = Field(
+        default_factory=list,
+        description="Array of relationship points"
+    )
+    relationship_levels: List[RelationshipLevel] = Field(
+        default_factory=list,
+        description="Array of relationship levels"
+    )
+    relationships_defined: List[str] = Field(
+        default_factory=list,
+        description="List of defined relationship IDs"
+    )
+
+
 class RelationshipVisual(BaseModel):
     """Visual styling for relationship display in Unity"""
 
@@ -214,11 +245,13 @@ class SessionState(BaseModel):
     character_relationships: Dict[str, float] = Field(default_factory=dict, description="DEPRECATED: Use relationship_points/relationship_levels instead")
 
     # New relationship system - tracks multiple relationship types per character
-    relationship_points: Dict[str, int] = Field(
-        default_factory=dict, description="Relationship ID -> current points (e.g., {'tatsuya-friendship': 130})"
+    relationship_points: List[RelationshipPoint] = Field(
+        default_factory=list,
+        description="Array of relationship points (e.g., [{'id': 'tatsuya-friendship', 'points': 130}])"
     )
-    relationship_levels: Dict[str, int] = Field(
-        default_factory=dict, description="Relationship ID -> current level (e.g., {'tatsuya-friendship': 1})"
+    relationship_levels: List[RelationshipLevel] = Field(
+        default_factory=list,
+        description="Array of relationship levels (e.g., [{'id': 'tatsuya-friendship', 'level': 1}])"
     )
 
     player_choices: List[Dict[str, Any]] = Field(default_factory=list, description="Choices made by player")
@@ -329,13 +362,13 @@ class StoryChoiceResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
 
     # NEW: Include updated relationship status after choice
-    relationship_points: Optional[Dict[str, int]] = Field(
-        None, 
-        description="Updated relationship points after choice (e.g., {'tatsuya-friendship': 130})"
-    )
-    relationship_levels: Optional[Dict[str, int]] = Field(
+    relationship_points: Optional[List[RelationshipPoint]] = Field(
         None,
-        description="Updated relationship levels after choice (e.g., {'tatsuya-friendship': 1})"
+        description="Updated relationship points after choice"
+    )
+    relationship_levels: Optional[List[RelationshipLevel]] = Field(
+        None,
+        description="Updated relationship levels after choice"
     )
 
 
@@ -486,13 +519,13 @@ class RelationshipStatusResponse(BaseModel):
     """
     
     session_id: str = Field(..., description="Session identifier")
-    relationship_points: Dict[str, int] = Field(
-        default_factory=dict,
-        description="Current relationship points (e.g., {'tatsuya-friendship': 130, 'rina-romance': 45})"
+    relationship_points: List[RelationshipPoint] = Field(
+        default_factory=list,
+        description="Array of relationship points"
     )
-    relationship_levels: Dict[str, int] = Field(
-        default_factory=dict,
-        description="Current relationship levels (e.g., {'tatsuya-friendship': 1, 'rina-romance': 0})"
+    relationship_levels: List[RelationshipLevel] = Field(
+        default_factory=list,
+        description="Array of relationship levels"
     )
     relationships_defined: List[str] = Field(
         default_factory=list,
@@ -533,6 +566,12 @@ class SessionStateResponse(BaseModel):
 
     # Session State (Q7 FIX: Add raw state for completion tracking)
     state: SessionState = Field(..., description="Raw session state with completion lists")
+
+    # Relationships (nested for convenience - mirrors data from state)
+    relationships: SessionStateRelationships = Field(
+        ...,
+        description="Nested relationships object (mirrors data from state for convenience)"
+    )
 
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional session metadata")
