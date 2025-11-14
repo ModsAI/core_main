@@ -7,8 +7,9 @@ Evaluates if dialogue exchanges address story beat objectives using LLM-based se
 import re
 from typing import Tuple
 
-from letta.llm_api.llm_client_base import LLMClient
+from letta.llm_api.llm_client import LLMClient
 from letta.log import get_logger
+from letta.schemas.enums import ProviderType
 from letta.schemas.llm_config import LLMConfig
 from letta.schemas.message import Message, MessageRole, TextContent
 from letta.schemas.user import User
@@ -72,7 +73,7 @@ class SemanticEvaluationService:
             
             # Create LLM client
             llm_client = LLMClient.create(
-                provider_type=self.model_endpoint_type,
+                provider_type=ProviderType.google_ai,
                 put_inner_thoughts_first=False,
                 actor=actor,
             )
