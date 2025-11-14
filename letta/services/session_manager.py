@@ -1469,7 +1469,7 @@ class SessionManager:
         
         await asyncio.gather(*update_tasks)
         logger.info(f"  ✅ Relationship memory updated for all agents")
-    
+
     def apply_relationship_effects(
         self,
         session_state: SessionState,

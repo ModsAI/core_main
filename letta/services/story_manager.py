@@ -127,6 +127,7 @@ class StoryManager:
                             "scene_count": len(scenes),
                             "instruction_count": len(story_upload.instructions),
                             "tags": story_upload.tags or [],
+                            "scene_progression_settings": story_upload.scene_progression_settings or {},
                         },
                         organization_id=actor.organization_id,
                     )

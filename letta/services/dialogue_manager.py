@@ -23,6 +23,7 @@ from letta.schemas.story import (
 from letta.schemas.user import User
 from letta.server.db import db_registry
 from letta.services.agent_manager import AgentManager
+from letta.services.semantic_evaluation_service import SemanticEvaluationService
 from letta.services.session_manager import SessionManager
 from letta.services.story_manager import StoryManager
 
@@ -48,6 +49,7 @@ class DialogueManager:
         self.agent_manager = AgentManager()
         self.session_manager = SessionManager()
         self.story_manager = StoryManager()
+        self.semantic_evaluator = SemanticEvaluationService()
         logger.info("💬 DialogueManager initialized")
 
     async def generate_dialogue(
@@ -86,9 +88,25 @@ class DialogueManager:
             if not session:
                 raise ValueError(f"Session '{session_id}' not found")
             
+            # Backwards compat: initialize new fields if missing
+            if not hasattr(session.state, 'dialogue_attempts'):
+                session.state.dialogue_attempts = {}
+            if not hasattr(session.state, 'semantic_similarity_scores'):
+                session.state.semantic_similarity_scores = {}
+            
             story = await self.story_manager.get_story(session.story_id, actor)
             if not story:
                 raise ValueError(f"Story '{session.story_id}' not found")
+            
+            # NEW: Check if semantic validation is enabled for this story
+            use_semantic_validation = story.metadata.get(
+                "scene_progression_settings", {}
+            ).get("use_semantic_validation", False)
+            max_attempts = story.metadata.get(
+                "scene_progression_settings", {}
+            ).get("max_off_topic_attempts", 4)
+            
+            logger.debug(f"  🧠 Semantic validation: {use_semantic_validation}, max attempts: {max_attempts}")
             
             # 🎮 FIRST-PERSON MODE: Validate player isn't talking to themselves
             # Find main character
@@ -167,15 +185,67 @@ class DialogueManager:
             # Step 6: Mark beat as completed and auto-advance
             beats_completed = []
             if next_beat:
-                beats_completed.append(next_beat["beat_id"])
-                session.state.completed_dialogue_beats.append(next_beat["beat_id"])
-                logger.info(f"  ✅ Beat completed: {next_beat['beat_id']}")
+                beat_id = next_beat["beat_id"]
                 
-                # ✅ FIX: Auto-advance instruction index after successful dialogue
-                # NOTE: We ALWAYS advance after dialogue, regardless of keyword matching
-                # This matches Kon's requirement: "state should change after sending chat message"
-                session.state.current_instruction_index += 1
-                logger.info(f"  ➡️ Auto-advancing to next instruction (index: {session.state.current_instruction_index})")
+                # NEW: Initialize attempt tracking if not exists
+                if beat_id not in session.state.dialogue_attempts:
+                    session.state.dialogue_attempts[beat_id] = 0
+                
+                # Increment attempt counter
+                session.state.dialogue_attempts[beat_id] += 1
+                current_attempts = session.state.dialogue_attempts[beat_id]
+                
+                logger.info(f"  📊 Beat {beat_id}: Attempt {current_attempts}/{max_attempts}")
+                
+                # Determine if beat should be marked complete
+                should_complete_beat = False
+                
+                if not use_semantic_validation:
+                    # Legacy behavior: always complete (backwards compatible)
+                    should_complete_beat = True
+                    logger.debug(f"  ⚡ Auto-advance (semantic validation disabled)")
+                    
+                elif current_attempts >= max_attempts:
+                    # Max attempts reached: auto-complete
+                    should_complete_beat = True
+                    logger.info(f"  ⏭️ Auto-complete after {max_attempts} attempts")
+                    
+                else:
+                    # Evaluate with LLM
+                    logger.debug(f"  🧠 Evaluating semantic completion...")
+                    beat_objective = next_beat.get("topic", next_beat.get("script_text", ""))
+                    
+                    was_addressed, confidence_score = await self.semantic_evaluator.evaluate_beat_completion(
+                        beat_objective=beat_objective,
+                        player_message=request.player_message,
+                        character_response=character_response,
+                        actor=actor,
+                    )
+                    
+                    # Store similarity score
+                    session.state.semantic_similarity_scores[beat_id] = confidence_score
+                    
+                    if was_addressed:
+                        should_complete_beat = True
+                        logger.info(f"  ✅ Beat addressed (confidence: {confidence_score:.2f})")
+                    else:
+                        logger.info(f"  ❌ Beat not addressed (confidence: {confidence_score:.2f})")
+                
+                # NOW mark beat as complete if determined
+                if should_complete_beat:
+                    beats_completed.append(beat_id)
+                    session.state.completed_dialogue_beats.append(beat_id)
+                    logger.info(f"  ✅ Beat completed: {beat_id}")
+                    
+                    # Reset attempt counter
+                    session.state.dialogue_attempts[beat_id] = 0
+                    
+                    # Auto-advance instruction index
+                    session.state.current_instruction_index += 1
+                    logger.info(f"  ➡️ Auto-advancing to next instruction")
+                else:
+                    # Beat NOT complete - stay on same beat
+                    logger.info(f"  🔄 Staying on beat {beat_id} (attempt {current_attempts}/{max_attempts})")
             
             # Step 7: Update session state
             await self._update_session_state(session_id, session.state, actor)

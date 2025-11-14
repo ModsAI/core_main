@@ -1,0 +1,13 @@
+[1mdiff --git a/.github/workflows/docker-integration-tests.yaml b/.github/workflows/docker-integration-tests.yaml[m
+[1mindex 75ad988d5..afd43f86d 100644[m
+[1m--- a/.github/workflows/docker-integration-tests.yaml[m
+[1m+++ b/.github/workflows/docker-integration-tests.yaml[m
+[36m@@ -61,7 +61,7 @@[m [mjobs:[m
+         LETTA_SERVER_PASS: test_server_token[m
+         LETTA_SERVER_URL: http://localhost:8283[m
+         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}[m
+[31m-        PYTHONPATH: ${{ github.workspace }}:${{ env.PYTHONPATH }}[m
+[32m+[m[32m        PYTHONPATH: ${{ github.workspace }}/letta:${{ env.PYTHONPATH }}[m
+       run: |[m
+         poetry run pytest -s tests/test_client.py[m
+ #        poetry run pytest -s tests/test_client_legacy.py[m

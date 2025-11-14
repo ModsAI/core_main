@@ -148,6 +148,10 @@ class StoryUpload(BaseModel):
     # Optional metadata
     description: Optional[str] = Field(None, description="Story description")
     tags: Optional[List[str]] = Field(None, description="Story tags")
+    scene_progression_settings: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Scene progression configuration (optional)",
+    )
 
 
 # ============================================================
@@ -219,6 +223,16 @@ class SessionState(BaseModel):
 
     player_choices: List[Dict[str, Any]] = Field(default_factory=list, description="Choices made by player")
     variables: Dict[str, Any] = Field(default_factory=dict, description="Story variables")
+    
+    # Scene progression tracking (semantic validation)
+    dialogue_attempts: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Beat ID -> attempt count (tracks off-topic attempts)"
+    )
+    semantic_similarity_scores: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Beat ID -> similarity score (0.0-1.0, how close to addressing beat)"
+    )
 
 
 class StorySession(BaseModel):
@@ -313,7 +327,7 @@ class StoryChoiceResponse(BaseModel):
     message: str = Field(..., description="Status message")
     session_id: str = Field(..., description="Session identifier")
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
-    
+
     # NEW: Include updated relationship status after choice
     relationship_points: Optional[Dict[str, int]] = Field(
         None, 
