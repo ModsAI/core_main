@@ -377,6 +377,13 @@ class SessionManager:
         if not session_data:
             raise ValueError(f"Session '{session_id}' not found")
         
+        # Get story to find main character name
+        story = await self.story_manager.get_story(session_data.story_id, actor)
+        main_character = next((char for char in story.characters if char.is_main_character), None)
+        player_name = main_character.name if main_character else "player"
+        
+        logger.info(f"  👤 Player character name: {player_name}")
+        
         # Collect messages from all character agents
         all_messages = []
         
@@ -416,7 +423,7 @@ class SessionManager:
                         if user_text:
                             logger.info(f"    ✅ Extracted user text: {user_text[:50]}...")
                             all_messages.append({
-                                "character": "player",
+                                "character": player_name,  # FIX: Use actual main character name
                                 "message": user_text,
                                 "timestamp": msg.created_at.isoformat() if msg.created_at else "",
                                 "role": "user"
