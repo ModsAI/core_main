@@ -549,12 +549,12 @@ class StoryManager:
                     current_scene.instructions.append(instruction)
                     
                     # Track characters in this scene
-                    if instruction.character and instruction.character not in current_scene.characters:
-                        # Find character_id from name
-                        for char in characters:
-                            if char.name == instruction.character:
-                                current_scene.characters.append(char.character_id)
-                                break
+                    if instruction.character:
+                        # Use character name (lowercase) for scene tracking
+                        char_name_lower = instruction.character.lower()
+                        if char_name_lower not in current_scene.characters:
+                            current_scene.characters.append(char_name_lower)
+                            logger.debug(f"      👤 Added character to scene: {instruction.character}")
                     
                     # Track dialogue beats
                     if instruction.type == "dialogue":
@@ -625,6 +625,17 @@ class StoryManager:
                             # Multiple choice support (Kon Unity integration)
                             "choices": instruction.choices,
                         }
+                        # Track characters mentioned in narration choices (for scene presence)
+                        if instruction.choices:
+                            for choice in instruction.choices:
+                                if hasattr(choice, 'relationshipEffects') and choice.relationshipEffects:
+                                    for effect in choice.relationshipEffects:
+                                        if hasattr(effect, 'character') and effect.character:
+                                            char_name_lower = effect.character.lower()
+                                            if char_name_lower not in current_scene.characters:
+                                                current_scene.characters.append(char_name_lower)
+                                                logger.debug(f"      👤 Added character from choice effect: {effect.character}")
+                        
                         logger.info(f"    DEBUG: Created narration_beat with choices={narration_beat.get('choices')}")
                         current_scene.narration_beats.append(narration_beat)
                         logger.info(f"    DEBUG: Scene now has {len(current_scene.narration_beats)} narration beats")
@@ -670,7 +681,20 @@ class StoryManager:
         
         # Add last scene if exists
         if current_scene and current_scene not in scenes:
+            # If no characters specified, default to all NPCs
+            if not current_scene.characters:
+                npc_names = [char.name.lower() for char in characters if not char.is_main_character]
+                current_scene.characters = npc_names
+                logger.info(f"  ℹ️ Scene {current_scene.scene_number} had no explicit characters, defaulting to all NPCs: {npc_names}")
+            
             scenes.append(current_scene)
+        
+        # Apply smart defaults to all scenes (in case some were saved earlier)
+        for scene in scenes:
+            if not scene.characters:
+                npc_names = [char.name.lower() for char in characters if not char.is_main_character]
+                scene.characters = npc_names
+                logger.info(f"  ℹ️ Scene {scene.scene_number} had no explicit characters, defaulting to all NPCs: {npc_names}")
         
         # Count total beats by type (Q5)
         total_dialogue = sum(len(scene.dialogue_beats) for scene in scenes)

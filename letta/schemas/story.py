@@ -257,6 +257,12 @@ class SessionState(BaseModel):
     player_choices: List[Dict[str, Any]] = Field(default_factory=list, description="Choices made by player")
     variables: Dict[str, Any] = Field(default_factory=dict, description="Story variables")
     
+    # Character presence tracking (for scene-based dialogue validation)
+    characters_in_scene: List[str] = Field(
+        default_factory=list,
+        description="Character names present in current scene (for dialogue validation)"
+    )
+    
     # Scene progression tracking (semantic validation)
     dialogue_attempts: Dict[str, int] = Field(
         default_factory=dict,

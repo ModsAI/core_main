@@ -189,6 +189,12 @@ class SessionManager:
                     relationship_levels.append(RelationshipLevel(id=rel_id, level=level))
                     logger.debug(f"  💝 Initialized relationship {rel_id}: {starting_points} points, level {level}")
 
+            # Get first scene's characters for scene-based dialogue validation
+            first_scene = story.scenes[0] if story.scenes else None
+            characters_in_first_scene = first_scene.characters if first_scene else []
+            
+            logger.debug(f"  👥 Characters in first scene: {characters_in_first_scene}")
+            
             initial_state = SessionState(
                 current_scene_number=1,  # Start at scene 1
                 current_instruction_index=0,  # Start at first instruction
@@ -198,6 +204,7 @@ class SessionManager:
                 relationship_levels=relationship_levels,  # NEW - multi-track relationships
                 player_choices=[],
                 variables={},
+                characters_in_scene=characters_in_first_scene,  # NEW - scene-based dialogue validation
             )
             
             logger.debug(f"✅ Session state initialized with {len(relationship_points)} relationships")
