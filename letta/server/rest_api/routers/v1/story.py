@@ -10,7 +10,7 @@ Provides endpoints for:
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
 from letta.log import get_logger
@@ -416,7 +416,7 @@ async def resume_session(
     
     try:
         session_manager = SessionManager()
-        response = await session_manager.resume_session(session_resume.story_id, actor)
+        response = await session_manager.resume_session(session_resume.story_id, actor, server)
         
         logger.info(f"✅ Session resumed for story: {session_resume.story_id}")
         return response
@@ -652,19 +652,23 @@ async def generate_dialogue(
     - 500: Dialogue generation error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
-    logger.info(f"💬 Dialogue request: session={session_id}, character={request.target_character}")
+    logger.info(f"💬 Dialogue request: session={session_id}, character={request.target_character}, user={actor.id}")
     
     try:
         from letta.services.dialogue_manager import DialogueManager
         
+        logger.debug(f"  🔧 Creating DialogueManager...")
         dialogue_manager = DialogueManager(server=server)
+        
+        logger.debug(f"  🚀 Calling generate_dialogue...")
         response = await dialogue_manager.generate_dialogue(session_id, request, actor)
         
-        logger.info(f"✅ Dialogue generated: {len(response.dialogue_text)} chars")
+        logger.info(f"✅ Dialogue generated: {len(response.dialogue_text)} chars, emotion={response.emotion}")
         return response
     
     except ValueError as e:
         logger.error(f"❌ Dialogue validation error: {e}")
+        logger.error(f"   Session: {session_id}, Character: {request.target_character}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -681,6 +685,7 @@ async def generate_dialogue(
     except Exception as e:
         error_msg = str(e)
         logger.error(f"❌ Dialogue generation error: {e}", exc_info=True)
+        logger.error(f"   Session: {session_id}, Character: {request.target_character}, Error type: {type(e).__name__}")
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1855,6 +1860,115 @@ async def validate_session(
                 "session_id": session_id,
                 "reason": f"Validation error: {str(e)}",
                 "suggestions": ["Check server logs", "Try again"],
+            },
+        )
+
+
+@router.get("/sessions/{session_id}/messages/recent")
+async def get_recent_messages(
+    session_id: str,
+    limit: int = Query(10, description="Number of recent messages to retrieve (default: 10, max: 50)"),
+    server: "SyncServer" = Depends(get_letta_server),
+    actor_id: str | None = Header(None, alias="user_id"),
+):
+    """
+    Get recent dialogue messages for a session.
+    
+    Returns the last N messages from all characters in chronological order,
+    including both player and NPC messages.
+    
+    **Use Case:**
+    - Show context when player reopens a story
+    - Build chat UI replay
+    - Debug dialogue flow
+    - Display conversation history in Unity
+    
+    **Example Request:**
+    ```
+    GET /api/v1/story/sessions/session-abc-123/messages/recent?limit=5
+    ```
+    
+    **Example Response:**
+    ```json
+    [
+        {
+            "character": "Alex",
+            "message": "Hey! I've been thinking about what you said earlier.",
+            "timestamp": "2025-11-17T14:29:45Z",
+            "role": "assistant"
+        },
+        {
+            "character": "player",
+            "message": "What do you think we should do?",
+            "timestamp": "2025-11-17T14:30:02Z",
+            "role": "user"
+        },
+        {
+            "character": "Alex",
+            "message": "We need to find a way out. The back door might be our best bet.",
+            "timestamp": "2025-11-17T14:30:15Z",
+            "role": "assistant"
+        }
+    ]
+    ```
+    
+    **Returns:**
+    - List of recent messages with character name, message text, timestamp, and role
+    - Messages sorted chronologically (oldest first)
+    - Limited to requested number (default 10, max 50)
+    
+    **Errors:**
+    - 404: Session not found
+    - 500: Database error
+    """
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
+    logger.info(f"📜 Recent messages request: {session_id}, limit={limit} (user: {actor.id})")
+    
+    try:
+        # Validate limit
+        if limit < 1:
+            limit = 10
+        elif limit > 50:
+            limit = 50
+        
+        session_manager = SessionManager()
+        messages = await session_manager.get_recent_messages(
+            session_id=session_id,
+            limit=limit,
+            actor=actor,
+            server=server,
+        )
+        
+        logger.info(f"✅ Retrieved {len(messages)} recent messages for session: {session_id}")
+        return messages
+    
+    except ValueError as e:
+        logger.error(f"❌ Session not found: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "SESSION_NOT_FOUND",
+                "message": str(e),
+                "suggestions": [
+                    f"Session '{session_id}' not found",
+                    "Verify session ID is correct",
+                    "Session may have been deleted",
+                ],
+            },
+        )
+    
+    except Exception as e:
+        logger.error(f"❌ Failed to retrieve recent messages: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "MESSAGES_RETRIEVAL_FAILED",
+                "message": f"Failed to retrieve messages: {str(e)}",
+                "suggestions": [
+                    "Check server logs for details",
+                    "Verify database connection",
+                    "Try again in a moment",
+                ],
             },
         )
 

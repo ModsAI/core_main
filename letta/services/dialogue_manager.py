@@ -79,14 +79,19 @@ class DialogueManager:
         logger.info(
             f"💬 Dialogue request: session={session_id}, "
             f"character={request.target_character}, "
-            f"message='{request.player_message[:50]}...'"
+            f"message='{request.player_message[:50]}...', "
+            f"user={actor.id}"
         )
         
         try:
             # Step 1: Get session and story
+            logger.debug(f"  📋 Fetching session: {session_id}")
             session = await self.session_manager._get_session_by_id(session_id, actor)
             if not session:
+                logger.error(f"  ❌ Session not found: {session_id}")
                 raise ValueError(f"Session '{session_id}' not found")
+            
+            logger.debug(f"  ✅ Session found, story_id: {session.story_id}")
             
             # Backwards compat: initialize new fields if missing
             if not hasattr(session.state, 'dialogue_attempts'):
@@ -115,13 +120,19 @@ class DialogueManager:
                 None
             )
             
-            # Block if player tries to talk to main character
-            if main_character and request.target_character == main_character.character_id:
-                raise ValueError(
-                    f"❌ Cannot talk to '{main_character.name}' - YOU ARE {main_character.name}! "
-                    f"You're playing as the main character. Talk to OTHER characters instead. "
-                    f"Available: {list(session.character_agents.keys())}"
-                )
+            # Block if player tries to talk to main character (case-insensitive)
+            if main_character:
+                target_char_lower = request.target_character.lower()
+                main_char_id_lower = (main_character.character_id or "").lower()
+                main_char_name_lower = main_character.name.lower()
+                
+                if target_char_lower in [main_char_id_lower, main_char_name_lower]:
+                    logger.warning(f"  ⚠️ Player tried to talk to themselves: '{request.target_character}'")
+                    raise ValueError(
+                        f"❌ Cannot talk to '{main_character.name}' - YOU ARE {main_character.name}! "
+                        f"You're playing as the main character. Talk to OTHER characters instead. "
+                        f"Available: {list(session.character_agents.keys())}"
+                    )
             
             # Step 2: Get current scene
             current_scene_num = session.state.current_scene_number
@@ -156,13 +167,28 @@ class DialogueManager:
                     f"You can only talk to characters who are in the current scene."
                 )
             
-            # Step 3: Get character agent (use lowercase for lookup)
-            agent_id = session.character_agents.get(target_character_lower)
+            # Step 3: Get character agent (case-insensitive lookup)
+            logger.debug(f"  👤 Looking up character: '{request.target_character}'")
+            logger.debug(f"  📋 Available agents in session: {list(session.character_agents.keys())}")
+            
+            # Find character agent (case-insensitive)
+            agent_id = None
+            matched_char_name = None
+            for char_name, char_agent_id in session.character_agents.items():
+                if char_name.lower() == target_character_lower:
+                    agent_id = char_agent_id
+                    matched_char_name = char_name
+                    break
+            
             if not agent_id:
+                logger.error(f"  ❌ Character '{request.target_character}' not found!")
+                logger.error(f"  📋 Available characters: {list(session.character_agents.keys())}")
                 raise ValueError(
                     f"Character '{request.target_character}' not found in session. "
                     f"Available: {list(session.character_agents.keys())}"
                 )
+            
+            logger.debug(f"  ✅ Found agent: {agent_id} for character '{matched_char_name}'")
             
             # Step 4: Get next dialogue beat for this character (use lowercase)
             next_beat = self._get_next_dialogue_beat(

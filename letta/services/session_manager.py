@@ -16,7 +16,7 @@ from letta.log import get_logger
 from letta.orm.story import StorySession as StorySessionORM
 from letta.schemas.agent import AgentType, CreateAgent
 from letta.schemas.block import CreateBlock
-from letta.schemas.message import MessageCreate, MessageRole
+from letta.schemas.message import Message, MessageCreate, MessageRole
 from letta.schemas.story import (
     Scene,
     SessionCreate,
@@ -180,9 +180,10 @@ class SessionManager:
                 for rel in story.relationships:
                     rel_id = rel.relationship_id
                     starting_points = rel.starting_points
-                    # Calculate starting level from starting points
-                    level = starting_points // rel.points_per_level if rel.points_per_level > 0 else 0
+                    # Calculate starting level from starting points (1-based)
+                    level = (starting_points // rel.points_per_level) + 1 if rel.points_per_level > 0 else 1
                     level = min(level, rel.max_levels)
+                    level = max(level, 1)  # Floor at 1, not 0
                     
                     relationship_points.append(RelationshipPoint(id=rel_id, points=starting_points))
                     relationship_levels.append(RelationshipLevel(id=rel_id, level=level))
@@ -279,6 +280,7 @@ class SessionManager:
         self,
         story_id: str,  # Changed: now accepts story_id to find active session
         actor: User,
+        server: "SyncServer",
     ) -> SessionResume:
         """
         Resume an existing session for a story.
@@ -288,6 +290,7 @@ class SessionManager:
         Args:
             story_id: Story ID to find active session for
             actor: User resuming
+            server: Server instance for accessing message manager
 
         Returns:
             Session resume data with current state
@@ -318,8 +321,13 @@ class SessionManager:
 
             current_scene = story.scenes[current_scene_num - 1]  # 1-indexed
 
-            # TODO: Get recent interaction history from agent messages
-            recent_history = []
+            # Get recent interaction history using generic method
+            recent_history = await self.get_recent_messages(
+                session_id=session_data.session_id,
+                limit=10,  # Last 10 messages
+                actor=actor,
+                server=server,
+            )
 
             logger.info(f"✅ Session resumed: {session_data.session_id}, Scene {current_scene_num}")
 
@@ -339,6 +347,124 @@ class SessionManager:
         except Exception as e:
             logger.error(f"❌ Session resume failed (unexpected): {e}", exc_info=True)
             raise Exception(f"Failed to resume session: {str(e)}") from e
+
+    async def get_recent_messages(
+        self,
+        session_id: str,
+        limit: int,
+        actor: User,
+        server: "SyncServer",
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recent dialogue messages from a session.
+        
+        Retrieves last N messages from all character agents,
+        formats them as simple dialogue, and returns in chronological order.
+        
+        Args:
+            session_id: Session identifier
+            limit: Max number of messages to return
+            actor: User making request
+            server: Server instance for accessing message manager
+            
+        Returns:
+            List of message dictionaries with character, message, timestamp, role
+        """
+        logger.info(f"📜 Getting recent messages for session: {session_id} (limit={limit})")
+        
+        # Get session
+        session_data = await self._get_session_by_id(session_id, actor)
+        if not session_data:
+            raise ValueError(f"Session '{session_id}' not found")
+        
+        # Collect messages from all character agents
+        all_messages = []
+        
+        for char_id, agent_id in session_data.character_agents.items():
+            try:
+                # Get messages for this agent
+                messages = await server.message_manager.list_messages_for_agent_async(
+                    agent_id=agent_id,
+                    actor=actor,
+                    limit=limit * 2,  # Get extra to ensure we have enough after filtering
+                    ascending=False,  # Newest first
+                )
+                
+                logger.info(f"📨 Agent {char_id}: Retrieved {len(messages)} messages")
+                
+                # Extract dialogue from messages
+                for msg in messages:
+                    logger.info(f"  Message role: {msg.role}, id: {msg.id}")
+                    
+                    # Handle assistant messages (NPC dialogue)
+                    if msg.role == MessageRole.assistant:
+                        dialogue_text = self._extract_dialogue_text(msg)
+                        if dialogue_text:
+                            logger.info(f"    ✅ Extracted dialogue: {dialogue_text[:50]}...")
+                            all_messages.append({
+                                "character": char_id,
+                                "message": dialogue_text,
+                                "timestamp": msg.created_at.isoformat() if msg.created_at else "",
+                                "role": "assistant"
+                            })
+                        else:
+                            logger.info(f"    ❌ No dialogue extracted from assistant message")
+                    
+                    # Handle user messages (player input)
+                    elif msg.role == MessageRole.user:
+                        user_text = self._extract_user_text(msg)
+                        if user_text:
+                            logger.info(f"    ✅ Extracted user text: {user_text[:50]}...")
+                            all_messages.append({
+                                "character": "player",
+                                "message": user_text,
+                                "timestamp": msg.created_at.isoformat() if msg.created_at else "",
+                                "role": "user"
+                            })
+                        else:
+                            logger.info(f"    ❌ No text extracted from user message")
+            
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to get messages for agent {agent_id} (char: {char_id}): {e}")
+                continue
+        
+        # Sort by timestamp (chronological order)
+        all_messages.sort(key=lambda x: x["timestamp"])
+        
+        # Return last N messages
+        recent = all_messages[-limit:] if all_messages else []
+        logger.info(f"✅ Retrieved {len(recent)} recent messages from {len(session_data.character_agents)} agents")
+        return recent
+
+    def _extract_dialogue_text(self, message: Message) -> Optional[str]:
+        """Extract dialogue text from assistant message (NPC speaking)."""
+        import json
+        
+        # Check for send_message tool calls
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            for tool_call in message.tool_calls:
+                if hasattr(tool_call, 'function') and tool_call.function.name == 'send_message':
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                        if 'message' in args:
+                            return args['message']
+                    except (json.JSONDecodeError, AttributeError):
+                        continue
+        
+        return None
+
+    def _extract_user_text(self, message: Message) -> Optional[str]:
+        """Extract text from user message (player speaking)."""
+        # User messages typically have content as list of TextContent
+        if hasattr(message, 'content') and message.content:
+            if isinstance(message.content, list):
+                for item in message.content:
+                    if hasattr(item, 'text'):
+                        return item.text
+            elif isinstance(message.content, str):
+                return message.content
+        
+        return None
 
     async def restart_session(
         self,
@@ -433,9 +559,10 @@ class SessionManager:
         Args:
             story: Story definition
             actor: User creating agents
+            session_state: Current session state for relationship context
 
         Returns:
-            Dict of character_id -> agent_id (excludes main character)
+            Dict of character name -> agent_id (excludes main character)
         """
         character_agents = {}
 
@@ -542,7 +669,8 @@ class SessionManager:
                 )
 
                 agent = await self.agent_manager.create_agent_async(create_agent, actor=actor)
-                character_agents[character.character_id] = agent.id
+                # Use character.name (not character_id) for user-friendly character identification
+                character_agents[character.name] = agent.id
 
                 logger.debug(f"    ✅ Created agent {agent.id} for {character.name}")
 
@@ -621,7 +749,7 @@ class SessionManager:
                 current_points = rel.starting_points
             current_level = self._find_relationship_level(session_state.relationship_levels, rel_id)
             if current_level is None:
-                current_level = 0
+                current_level = 1  # Default to level 1 (1-based)
             
             # Calculate progress to next level
             if rel.points_per_level > 0:
@@ -1490,7 +1618,7 @@ class SessionManager:
             session_id: Session identifier (for logging)
             story: Story with character definitions
             session_state: Current session state with updated relationships
-            character_agents: Dict mapping character_id to agent_id
+            character_agents: Dict mapping character name to agent_id
             actor: User making the request
         """
         if not story.relationships:
@@ -1538,8 +1666,8 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"    ❌ Failed to update relationships for {char_id}: {e}")
         
-        # Create character lookup for agent updates
-        char_lookup = {char.character_id: char for char in story.characters if char.character_id}
+        # Create character lookup for agent updates (using character.name as key)
+        char_lookup = {char.name: char for char in story.characters if char.name}
         
         # Update all agents in parallel
         update_tasks = [
@@ -1641,15 +1769,15 @@ class SessionManager:
             
             self._update_relationship_point(session_state.relationship_points, rel_id, new_points)
             
-            # Recalculate level
+            # Recalculate level (1-based)
             if rel_def.points_per_level > 0:
-                new_level = new_points // rel_def.points_per_level
+                new_level = (new_points // rel_def.points_per_level) + 1
                 new_level = min(new_level, rel_def.max_levels)  # Cap at max
-                new_level = max(new_level, 0)  # Floor at 0
+                new_level = max(new_level, 1)  # Floor at 1
             else:
-                new_level = 0
+                new_level = 1
             
-            old_level = self._find_relationship_level(session_state.relationship_levels, rel_id) or 0
+            old_level = self._find_relationship_level(session_state.relationship_levels, rel_id) or 1
             self._update_relationship_level(session_state.relationship_levels, rel_id, new_level)
             
             # Log the change

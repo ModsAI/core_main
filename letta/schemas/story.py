@@ -363,7 +363,7 @@ class StoryChoiceResponse(BaseModel):
 
     # NEW: Include updated relationship status after choice
     relationship_points: Optional[List[RelationshipPoint]] = Field(
-        None,
+        None, 
         description="Updated relationship points after choice"
     )
     relationship_levels: Optional[List[RelationshipLevel]] = Field(
