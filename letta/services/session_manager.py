@@ -603,7 +603,7 @@ class SessionManager:
                 # Get first scene to initialize scene context
                 first_scene = story.scenes[0] if story.scenes else None
                 if first_scene:
-                    scene_value = self._build_scene_context(first_scene)
+                    scene_value = self._build_scene_context(first_scene, session_state=session_state)
                 else:
                     # Fallback if no scenes exist
                     scene_value = "=== CURRENT SCENE ===\nThe story is about to begin..."
@@ -783,6 +783,23 @@ class SessionManager:
                 ""
             ])
         
+        # NEW: Add choice history for this character
+        choice_history = self._get_relationship_choice_history(
+            session_state=session_state,
+            character=current_character,
+            max_choices=5
+        )
+        
+        if choice_history:
+            context_parts.extend([
+                "",
+                "Your History Together:",
+            ])
+            for choice_desc in choice_history:
+                context_parts.append(f"  - {choice_desc}")
+        
+        context_parts.append("")
+        
         context_parts.extend([
             "IMPORTANT:",
             "- Adjust your tone and familiarity based on relationship level",
@@ -832,6 +849,76 @@ class SessionManager:
         labels = descriptions.get(rel_type, ["Unknown"] * 5)
         index = min(int(progress * len(labels)), len(labels) - 1)
         return labels[index]
+
+    def _get_relationship_choice_history(
+        self,
+        session_state: SessionState,
+        character: StoryCharacter,
+        max_choices: int = 5,
+    ) -> List[str]:
+        """
+        Get formatted choice history for choices that affected this character.
+        Returns list of strings like: "You said 'Yes!' - Character appreciated (+10)"
+        """
+        character_choices = []
+        
+        for choice in reversed(session_state.player_choices):
+            if "relationship_effects" not in choice or not choice["relationship_effects"]:
+                continue
+                
+            for effect in choice["relationship_effects"]:
+                if effect.get("character", "").lower() == character.name.lower():
+                    effect_value = effect.get("effect", "")
+                    effect_type = effect.get("type", "friendship")
+                    
+                    # Format: "You [choice] - [effect]"
+                    formatted = f'"{choice["choice_text"]}"'
+                    
+                    # Add effect indicator
+                    if effect_value.startswith("+"):
+                        formatted += f" (+{effect_value[1:]} {effect_type})"
+                    elif effect_value.startswith("-"):
+                        formatted += f" ({effect_value} {effect_type})"
+                    
+                    character_choices.append(formatted)
+                    break
+            
+            if len(character_choices) >= max_choices:
+                break
+        
+        return character_choices
+
+    def _get_recent_scene_choices(
+        self,
+        session_state: SessionState,
+        current_scene_number: int,
+        max_choices: int = 5,
+    ) -> List[str]:
+        """
+        Get formatted choice history for recent scenes.
+        Includes choices from current scene and previous scene.
+        """
+        scene_choices = []
+        
+        for choice in reversed(session_state.player_choices):
+            scene_num = choice.get("scene_number", 0)
+            
+            # Only include current and previous scene
+            if scene_num >= current_scene_number - 1:
+                choice_text = choice.get("choice_text", "")
+                formatted = f'"{choice_text}"'
+                
+                if scene_num == current_scene_number:
+                    formatted += " (this scene)"
+                elif scene_num == current_scene_number - 1:
+                    formatted += " (previous scene)"
+                
+                scene_choices.append(formatted)
+            
+            if len(scene_choices) >= max_choices:
+                break
+        
+        return scene_choices
 
     def _build_character_persona(self, character: StoryCharacter, story: Story) -> str:
         """
@@ -967,7 +1054,7 @@ class SessionManager:
 
         return "\n".join(context_parts)
 
-    def _build_scene_context(self, scene: Scene) -> str:
+    def _build_scene_context(self, scene: Scene, session_state: SessionState = None) -> str:
         """
         Build current scene context for agent (current_scene block).
 
@@ -977,10 +1064,12 @@ class SessionManager:
         - Scene number and title
         - Location/setting
         - Mood/atmosphere
+        - Recent player choices (if session_state provided)
         - Brief context (minimal, useful)
 
         Args:
             scene: Current scene object
+            session_state: Optional session state for including recent choices
 
         Returns:
             Formatted scene context string
@@ -1005,6 +1094,23 @@ class SessionManager:
 
         if mood_indicators:
             context_parts.extend(mood_indicators)
+
+        # NEW: Add recent choices if session_state provided
+        if session_state:
+            recent_choices = self._get_recent_scene_choices(
+                session_state=session_state,
+                current_scene_number=scene.scene_number,
+                max_choices=5
+            )
+            
+            if recent_choices:
+                context_parts.extend([
+                    "",
+                    "Recent Decisions:",
+                ])
+                for choice_desc in recent_choices:
+                    context_parts.append(f"  - {choice_desc}")
+                context_parts.append("")
 
         # Add minimal context
         context_parts.extend(
@@ -1957,6 +2063,7 @@ class SessionManager:
             current_scene=new_scene,
             all_scenes=story.scenes,
             current_scene_number=new_scene_number,
+            session_state=session.state,
         )
         
         # Step 4: Update all character agents in parallel
@@ -2062,6 +2169,7 @@ class SessionManager:
         current_scene: Scene,
         all_scenes: List[Scene],
         current_scene_number: int,
+        session_state: SessionState = None,
     ) -> str:
         """
         Build scene context with history tracking.
@@ -2069,12 +2177,14 @@ class SessionManager:
         Instead of just current scene, this includes:
         1. Current scene details (location, mood)
         2. Scene history (where we've been)
-        3. Journey context for better NPC memory
+        3. Recent player choices (if session_state provided)
+        4. Journey context for better NPC memory
         
         Args:
             current_scene: Current scene object
             all_scenes: All scenes in the story
             current_scene_number: Current scene number (1-indexed)
+            session_state: Optional session state for including recent choices
             
         Returns:
             Formatted scene context string with history
@@ -2127,6 +2237,22 @@ class SessionManager:
                     f"• Scene {scene.scene_number}: {scene.title} - "
                     f"{scene.location}{scene_marker}"
                 )
+        
+        # NEW: Add recent choices if session_state provided
+        if session_state:
+            recent_choices = self._get_recent_scene_choices(
+                session_state=session_state,
+                current_scene_number=current_scene_number,
+                max_choices=5
+            )
+            
+            if recent_choices:
+                context_parts.extend([
+                    "",
+                    "Recent Decisions:",
+                ])
+                for choice_desc in recent_choices:
+                    context_parts.append(f"  - {choice_desc}")
         
         # Add context reminder
         context_parts.extend([

@@ -812,10 +812,31 @@ async def select_choice(
         # Get the current beat (the one with choices) so we can mark it as completed
         current_beat = session_manager._get_next_instruction(story, session.state)
         
-        # Record choice in session state
+        # Get selected choice object for metadata
+        selected_choice = None
+        if current_beat and current_beat.get("choices"):
+            for choice in current_beat.get("choices", []):
+                if choice.get("id") == request.choice_id:
+                    selected_choice = choice
+                    break
+        
+        # Debug logging
+        if not selected_choice:
+            logger.warning(f"  ⚠️ Could not find choice {request.choice_id} in current beat")
+            logger.warning(f"     Current beat type: {current_beat.get('type') if current_beat else 'None'}")
+            logger.warning(f"     Current beat has choices: {bool(current_beat.get('choices')) if current_beat else False}")
+            if current_beat and current_beat.get("choices"):
+                choice_ids = [c.get("id") for c in current_beat.get("choices", [])]
+                logger.warning(f"     Available choice IDs: {choice_ids}")
+        
+        # Record choice in session state with enhanced metadata
         choice_record = {
             "choice_id": request.choice_id,
             "choice_text": request.choice_text,
+            "scene_number": session.state.current_scene_number,
+            "instruction_type": current_beat.get("type", "") if current_beat else "",
+            "question_context": current_beat.get("text", "")[:100] if current_beat else "",  # Truncate to 100 chars
+            "relationship_effects": selected_choice.get("relationship_effects", []) if selected_choice else [],
             "timestamp": datetime.now().isoformat(),
         }
         session.state.player_choices.append(choice_record)
