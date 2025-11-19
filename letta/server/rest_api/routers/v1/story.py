@@ -119,11 +119,11 @@ async def upload_story(
     - 500: Database error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
-    logger.info(f"📤 Story upload request: {story.title} (user: {actor.id}, overwrite={overwrite})")
+    logger.info(f"Story upload request: {story.title} (user: {actor.id}, overwrite={overwrite})")
     
     try:
         # IMM-10: Validate story before processing
-        logger.info("🔍 Running story validation...")
+        logger.info("Running story validation...")
         validator = StoryValidator()
         story_dict = story.model_dump()
         validation_errors = validator.validate_story(story_dict)
@@ -134,7 +134,7 @@ async def upload_story(
         
         # If there are errors, return helpful error response
         if errors_only:
-            logger.error(f"❌ Story validation failed: {len(errors_only)} errors, {len(warnings_only)} warnings")
+            logger.error(f"Story validation failed: {len(errors_only)} errors, {len(warnings_only)} warnings")
             
             error_messages = []
             for error in errors_only:
@@ -166,11 +166,11 @@ async def upload_story(
         
         # Log warnings if any
         if warnings_only:
-            logger.warning(f"⚠️ Story validation passed with {len(warnings_only)} warning(s)")
+            logger.warning(f"Story validation passed with {len(warnings_only)} warning(s)")
             for warning in warnings_only:
                 logger.warning(f"  - {warning.message} ({warning.location})")
         else:
-            logger.info("✅ Story validation passed with no errors or warnings")
+            logger.info("Story validation passed with no errors or warnings")
         
         story_manager = StoryManager()
         
@@ -195,7 +195,7 @@ async def upload_story(
                 
                 if sessions_deleted > 0:
                     logger.warning(
-                        f"  ⚠️ IMPORTANT: {sessions_deleted} existing session(s) will be deleted "
+                        f"  WARNING: IMPORTANT: {sessions_deleted} existing session(s) will be deleted "
                         f"when story '{story_id}' is overwritten!"
                     )
                 
@@ -203,18 +203,18 @@ async def upload_story(
                 deleted = await story_manager.delete_story(story_id, actor)
                 
                 if deleted:
-                    logger.info(f"  ✅ Story deleted: {story_id} ({sessions_deleted} sessions invalidated)")
+                    logger.info(f"  SUCCESS: Story deleted: {story_id} ({sessions_deleted} sessions invalidated)")
                 else:
-                    logger.error(f"  ❌ Failed to delete story: {story_id}")
+                    logger.error(f"  ERROR: Failed to delete story: {story_id}")
             else:
-                logger.info(f"  ℹ️ No existing story found for {story_id}, proceeding with fresh upload")
+                logger.info(f"  INFO: No existing story found for {story_id}, proceeding with fresh upload")
         
         response = await story_manager.upload_story(story, actor)
         
         # Add session invalidation warning to response if sessions were deleted
         if sessions_deleted > 0:
             response.instructions.insert(0, 
-                f"⚠️ IMPORTANT: {sessions_deleted} existing session(s) were invalidated during overwrite"
+                f"WARNING: IMPORTANT: {sessions_deleted} existing session(s) were invalidated during overwrite"
             )
             response.instructions.insert(1,
                 "Any old session IDs are now invalid - you MUST start a NEW session"
@@ -223,11 +223,11 @@ async def upload_story(
                 "Do NOT reuse old session IDs after overwrite - they have been deleted"
             )
         
-        logger.info(f"✅ Story uploaded: {response.story_id} (overwrite={overwrite}, sessions_deleted={sessions_deleted})")
+        logger.info(f"SUCCESS: Story uploaded: {response.story_id} (overwrite={overwrite}, sessions_deleted={sessions_deleted})")
         return response
     
     except ValueError as e:
-        logger.error(f"❌ Story upload validation error: {e}")
+        logger.error(f"ERROR: Story upload validation error: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -247,7 +247,7 @@ async def upload_story(
         
         # Check for duplicate story
         if "already exists" in error_msg.lower():
-            logger.error(f"❌ Duplicate story ID: {story.id}")
+            logger.error(f"ERROR: Duplicate story ID: {story.id}")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
@@ -262,7 +262,7 @@ async def upload_story(
             )
         
         # Generic error
-        logger.error(f"❌ Story upload error: {e}", exc_info=True)
+        logger.error(f"ERROR: Story upload error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -328,7 +328,7 @@ async def list_stories(
         # Convert to Pydantic models
         story_items = [StoryListItem(**story) for story in stories]
         
-        logger.info(f"✅ Returning {len(story_items)} stories (total: {total})")
+        logger.info(f"SUCCESS: Returning {len(story_items)} stories (total: {total})")
         
         return StoryListResponse(
             stories=story_items,
@@ -340,7 +340,7 @@ async def list_stories(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Failed to list stories: {e}", exc_info=True)
+        logger.error(f"ERROR: Failed to list stories: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list stories: {str(e)}",
@@ -397,11 +397,11 @@ async def start_session(
         session_manager = SessionManager()
         response = await session_manager.start_session(session_create, actor)
         
-        logger.info(f"✅ Session started: {response.session_id}")
+        logger.info(f"SUCCESS: Session started: {response.session_id}")
         return response
     
     except ValueError as e:
-        logger.error(f"❌ Session start validation error: {e}")
+        logger.error(f"ERROR: Session start validation error: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -417,7 +417,7 @@ async def start_session(
     
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"❌ Session start error: {e}", exc_info=True)
+        logger.error(f"ERROR: Session start error: {e}", exc_info=True)
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -463,17 +463,17 @@ async def resume_session(
     - 500: Database error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
-    logger.info(f"▶️ Session resume request: {session_resume.story_id} (user: {actor.id})")
+    logger.info(f" Session resume request: {session_resume.story_id} (user: {actor.id})")
     
     try:
         session_manager = SessionManager()
         response = await session_manager.resume_session(session_resume.story_id, actor, server)
         
-        logger.info(f"✅ Session resumed for story: {session_resume.story_id}")
+        logger.info(f"SUCCESS: Session resumed for story: {session_resume.story_id}")
         return response
     
     except ValueError as e:
-        logger.error(f"❌ Session resume validation error: {e}")
+        logger.error(f"ERROR: Session resume validation error: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -488,7 +488,7 @@ async def resume_session(
         )
     
     except Exception as e:
-        logger.error(f"❌ Session resume error: {e}", exc_info=True)
+        logger.error(f"ERROR: Session resume error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -538,11 +538,11 @@ async def restart_session(
         session_manager = SessionManager()
         response = await session_manager.restart_session(session_id, actor)
         
-        logger.info(f"✅ Session restarted: {response.session_id}")
+        logger.info(f"SUCCESS: Session restarted: {response.session_id}")
         return response
     
     except ValueError as e:
-        logger.error(f"❌ Session restart validation error: {e}")
+        logger.error(f"ERROR: Session restart validation error: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -556,7 +556,7 @@ async def restart_session(
         )
     
     except Exception as e:
-        logger.error(f"❌ Session restart error: {e}", exc_info=True)
+        logger.error(f"ERROR: Session restart error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -598,7 +598,7 @@ async def delete_session(
     - 500: Deletion error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
-    logger.info(f"🗑️ Session delete request: {session_id} (user: {actor.id})")
+    logger.info(f" Session delete request: {session_id} (user: {actor.id})")
     
     try:
         session_manager = SessionManager()
@@ -613,14 +613,14 @@ async def delete_session(
                 },
             )
         
-        logger.info(f"✅ Session deleted: {session_id}")
+        logger.info(f"SUCCESS: Session deleted: {session_id}")
         return {"success": True, "message": f"Session {session_id} deleted successfully"}
     
     except HTTPException:
         raise
     
     except Exception as e:
-        logger.error(f"❌ Session delete error: {e}", exc_info=True)
+        logger.error(f"ERROR: Session delete error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -714,11 +714,11 @@ async def generate_dialogue(
         logger.debug(f"  🚀 Calling generate_dialogue...")
         response = await dialogue_manager.generate_dialogue(session_id, request, actor)
         
-        logger.info(f"✅ Dialogue generated: {len(response.dialogue_text)} chars, emotion={response.emotion}")
+        logger.info(f"SUCCESS: Dialogue generated: {len(response.dialogue_text)} chars, emotion={response.emotion}")
         return response
     
     except ValueError as e:
-        logger.error(f"❌ Dialogue validation error: {e}")
+        logger.error(f"ERROR: Dialogue validation error: {e}")
         logger.error(f"   Session: {session_id}, Character: {request.target_character}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -735,7 +735,7 @@ async def generate_dialogue(
     
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"❌ Dialogue generation error: {e}", exc_info=True)
+        logger.error(f"ERROR: Dialogue generation error: {e}", exc_info=True)
         logger.error(f"   Session: {session_id}, Character: {request.target_character}, Error type: {type(e).__name__}")
         
         raise HTTPException(
@@ -848,7 +848,7 @@ async def select_choice(
         
         # If version was NULL, initialize it to 1 immediately
         if session.version is None:
-            logger.warning(f"  ⚠️ Session {session_id} has NULL version, initializing to 1")
+            logger.warning(f"  WARNING: Session {session_id} has NULL version, initializing to 1")
             async with db_registry.async_session() as init_session:
                 async with init_session.begin():
                     stmt = update(StorySessionORM).where(
@@ -873,7 +873,7 @@ async def select_choice(
         
         # Debug logging
         if not selected_choice:
-            logger.warning(f"  ⚠️ Could not find choice {request.choice_id} in current beat")
+            logger.warning(f"  WARNING: Could not find choice {request.choice_id} in current beat")
             logger.warning(f"     Current beat type: {current_beat.get('type') if current_beat else 'None'}")
             logger.warning(f"     Current beat has choices: {bool(current_beat.get('choices')) if current_beat else False}")
             if current_beat and current_beat.get("choices"):
@@ -908,21 +908,21 @@ async def select_choice(
             if beat_type == "dialogue":
                 if beat_id not in session.state.completed_dialogue_beats:
                     session.state.completed_dialogue_beats.append(beat_id)
-                    logger.info(f"  ✅ Completed dialogue beat: {beat_id}")
+                    logger.info(f"  SUCCESS: Completed dialogue beat: {beat_id}")
             elif beat_type == "narration":
                 if beat_id not in session.state.completed_narration_beats:
                     session.state.completed_narration_beats.append(beat_id)
-                    logger.info(f"  ✅ Completed narration beat: {beat_id}")
+                    logger.info(f"  SUCCESS: Completed narration beat: {beat_id}")
             elif beat_type == "action":
                 if beat_id not in session.state.completed_action_beats:
                     session.state.completed_action_beats.append(beat_id)
-                    logger.info(f"  ✅ Completed action beat: {beat_id}")
+                    logger.info(f"  SUCCESS: Completed action beat: {beat_id}")
 
         # Advance to next instruction
         current_scene = story.scenes[session.state.current_scene_number - 1]
         session.state.current_instruction_index += 1
 
-        logger.info(f"  ✓ Choice recorded: {request.choice_id}, advanced to instruction {session.state.current_instruction_index}")
+        logger.info(f"  OK: Choice recorded: {request.choice_id}, advanced to instruction {session.state.current_instruction_index}")
 
         # Save session state with optimistic locking (FIXED - use proper method)
         update_result = await session_manager.update_session_state_with_version(
@@ -934,7 +934,7 @@ async def select_choice(
         
         if not update_result["success"]:
             # Version mismatch - state was modified concurrently
-            logger.error(f"  ❌ Concurrent modification detected during choice selection")
+            logger.error(f"  ERROR: Concurrent modification detected during choice selection")
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -953,7 +953,7 @@ async def select_choice(
             actor=actor,
         )
 
-        logger.info(f"✅ Choice selection complete: {request.choice_id}")
+        logger.info(f"SUCCESS: Choice selection complete: {request.choice_id}")
 
         # Include updated relationship status in response (NEW)
         return StoryChoiceResponse(
@@ -967,14 +967,14 @@ async def select_choice(
         )
 
     except ValueError as e:
-        logger.error(f"❌ Choice selection error: {e}")
+        logger.error(f"ERROR: Choice selection error: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "CHOICE_ERROR", "message": str(e), "suggestions": ["Verify session exists", "Check story is loaded"]},
         )
 
     except Exception as e:
-        logger.error(f"❌ Choice selection failed: {e}", exc_info=True)
+        logger.error(f"ERROR: Choice selection failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -1068,7 +1068,7 @@ async def advance_story(
             story_manager = StoryManager()
             
             if attempt > 0:
-                logger.info(f"  ♻️ Retry attempt {attempt + 1}/{MAX_RETRIES}")
+                logger.info(f"  RETRY: Retry attempt {attempt + 1}/{MAX_RETRIES}")
 
             # Get session
             session = await session_manager._get_session_by_id(session_id, actor)
@@ -1089,7 +1089,7 @@ async def advance_story(
             
             # If version was NULL, initialize it to 1 immediately
             if session.version is None:
-                logger.warning(f"  ⚠️ Session {session_id} has NULL version, initializing to 1")
+                logger.warning(f"  WARNING: Session {session_id} has NULL version, initializing to 1")
                 from sqlalchemy import update
                 from letta.orm.story import StorySession as StorySessionORM
                 async with db_registry.async_session() as init_session:
@@ -1120,7 +1120,7 @@ async def advance_story(
             current_instruction = session_manager._get_next_instruction(story, session.state)
 
             if not current_instruction:
-                logger.warning(f"  ⚠️ No current instruction to advance from")
+                logger.warning(f"  WARNING: No current instruction to advance from")
                 return JSONResponse(
                     status_code=400,
                     content={
@@ -1143,12 +1143,12 @@ async def advance_story(
                 # Mark dialogue beat as completed
                 if beat_id and beat_id not in session.state.completed_dialogue_beats:
                     session.state.completed_dialogue_beats.append(beat_id)
-                    logger.info(f"  ✅ Marked dialogue beat as completed: {beat_id}")
+                    logger.info(f"  SUCCESS: Marked dialogue beat as completed: {beat_id}")
                 # Will advance instruction index below (same as other beats)
 
             # Check if this instruction has choices
             if current_instruction.get("choices"):
-                logger.warning(f"  ⚠️ Instruction has choices - should use /select-choice")
+                logger.warning(f"  WARNING: Instruction has choices - should use /select-choice")
                 return JSONResponse(
                     status_code=400,
                     content={
@@ -1161,7 +1161,7 @@ async def advance_story(
 
             # Check if story is complete
             if beat_type == "end":
-                logger.info(f"  ✓ Story is complete")
+                logger.info(f"  OK: Story is complete")
                 return JSONResponse(
                     status_code=400,
                     content={
@@ -1193,7 +1193,7 @@ async def advance_story(
                     
                     # Get next instruction from new scene
                     next_instruction = session_manager._get_next_instruction(story, session.state)
-                    logger.info(f"  ✅ Advanced to Scene {current_scene + 1}")
+                    logger.info(f"  SUCCESS: Advanced to Scene {current_scene + 1}")
                     
                     # Update NPC memory blocks with new scene context
                     try:
@@ -1208,7 +1208,7 @@ async def advance_story(
                         )
                     except Exception as e:
                         # Don't fail the entire scene transition if memory update fails
-                        logger.error(f"  ⚠️ Failed to update scene memories: {e}", exc_info=True)
+                        logger.error(f"  WARNING: Failed to update scene memories: {e}", exc_info=True)
                     
                     return AdvanceStoryResponse(
                         success=True,
@@ -1219,7 +1219,7 @@ async def advance_story(
                         session_id=session_id,
                     )
                 else:
-                    # ✅ FIX: Last scene complete - transition to "end" state
+                    # SUCCESS: FIX: Last scene complete - transition to "end" state
                     # This is Kon's issue: Core must send type: "end" instruction
                     logger.info(f"  🏁 Last scene complete - transitioning to story end")
                     
@@ -1237,7 +1237,7 @@ async def advance_story(
                     
                     # Get "end" instruction (scene_number > len(scenes) triggers this)
                     next_instruction = session_manager._get_next_instruction(story, session.state)
-                    logger.info(f"  ✅ Story complete - returning type: 'end'")
+                    logger.info(f"  SUCCESS: Story complete - returning type: 'end'")
                     
                     return AdvanceStoryResponse(
                         success=True,
@@ -1253,17 +1253,17 @@ async def advance_story(
                 if beat_type == "narration":
                     if beat_id not in session.state.completed_narration_beats:
                         session.state.completed_narration_beats.append(beat_id)
-                        logger.info(f"  ✅ Marked narration beat as completed: {beat_id}")
+                        logger.info(f"  SUCCESS: Marked narration beat as completed: {beat_id}")
                     else:
-                        logger.debug(f"  ℹ️ Narration beat already completed: {beat_id}")
+                        logger.debug(f"  INFO: Narration beat already completed: {beat_id}")
                 elif beat_type == "action":
                     if beat_id not in session.state.completed_action_beats:
                         session.state.completed_action_beats.append(beat_id)
-                        logger.info(f"  ✅ Marked action beat as completed: {beat_id}")
+                        logger.info(f"  SUCCESS: Marked action beat as completed: {beat_id}")
                     else:
-                        logger.debug(f"  ℹ️ Action beat already completed: {beat_id}")
+                        logger.debug(f"  INFO: Action beat already completed: {beat_id}")
                 else:
-                    logger.debug(f"  ℹ️ Beat type {beat_type} doesn't need completion tracking")
+                    logger.debug(f"  INFO: Beat type {beat_type} doesn't need completion tracking")
 
             # FIX: Increment instruction index (same as /select-choice does)
             session.state.current_instruction_index += 1
@@ -1282,12 +1282,12 @@ async def advance_story(
                 if attempt < MAX_RETRIES - 1:
                     # Retry with exponential backoff
                     wait_time = 0.1 * (2 ** attempt)  # 0.1s, 0.2s, 0.4s
-                    logger.warning(f"  ⚠️ Concurrent modification detected - retrying in {wait_time}s...")
+                    logger.warning(f"  WARNING: Concurrent modification detected - retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                     continue  # Retry the loop
                 else:
                     # Max retries exceeded
-                    logger.error(f"  ❌ Max retries exceeded - concurrent modifications ongoing")
+                    logger.error(f"  ERROR: Max retries exceeded - concurrent modifications ongoing")
                     return JSONResponse(
                         status_code=409,
                         content={
@@ -1311,11 +1311,11 @@ async def advance_story(
                 session_id=session_id,
             )
 
-            logger.info(f"  ✅ Story advanced successfully from {beat_type}")
+            logger.info(f"  SUCCESS: Story advanced successfully from {beat_type}")
             return response
             
         except ValueError as e:
-            logger.error(f"❌ Advance Story FAILED (ValueError): {e}")
+            logger.error(f"ERROR: Advance Story FAILED (ValueError): {e}")
             return JSONResponse(
                 status_code=400,
                 content={
@@ -1326,7 +1326,7 @@ async def advance_story(
             )
 
         except Exception as e:
-            logger.error(f"❌ Advance Story FAILED (Exception): {e}", exc_info=True)
+            logger.error(f"ERROR: Advance Story FAILED (Exception): {e}", exc_info=True)
             return JSONResponse(
                 status_code=500,
                 content={
@@ -1403,14 +1403,14 @@ async def advance_scene_manually(
 
     try:
         session_manager = SessionManager()
-        logger.debug(f"  ✓ SessionManager initialized")
+        logger.debug(f"  OK: SessionManager initialized")
 
         # Get current session
         session = await session_manager._get_session_by_id(session_id, actor)
         if not session:
             logger.warning(f"  ✗ Session not found: {session_id}")
             raise ValueError(f"Session '{session_id}' not found")
-        logger.debug(f"  ✓ Session retrieved - Story: {session.story_id}, Current Scene: {session.state.current_scene_number}")
+        logger.debug(f"  OK: Session retrieved - Story: {session.story_id}, Current Scene: {session.state.current_scene_number}")
 
         # Get story
         from letta.services.story_manager import StoryManager
@@ -1421,7 +1421,7 @@ async def advance_scene_manually(
         if not story:
             logger.warning(f"  ✗ Story not found: {session.story_id}")
             raise ValueError(f"Story '{session.story_id}' not found")
-        logger.debug(f"  ✓ Story retrieved - Title: '{story.title}', Total Scenes: {len(story.scenes)}")
+        logger.debug(f"  OK: Story retrieved - Title: '{story.title}', Total Scenes: {len(story.scenes)}")
 
         # Check if we can advance
         current_scene = session.state.current_scene_number
@@ -1449,7 +1449,7 @@ async def advance_scene_manually(
         session.state.current_instruction_index = 0
         completed_beats_before = len(session.state.completed_dialogue_beats)
         session.state.completed_dialogue_beats = []  # Reset for new scene
-        logger.debug(f"  ✓ State updated - Reset {completed_beats_before} completed beats for new scene")
+        logger.debug(f"  OK: State updated - Reset {completed_beats_before} completed beats for new scene")
 
         # Save to database
         logger.debug(f"  → Saving to database...")
@@ -1461,9 +1461,9 @@ async def advance_scene_manually(
             async with db_session.begin():
                 stmt = update(StorySessionORM).where(StorySessionORM.session_id == session_id).values(state=session.state.dict())
                 result = await db_session.execute(stmt)
-                logger.debug(f"  ✓ Database updated - Rows affected: {result.rowcount}")
+                logger.debug(f"  OK: Database updated - Rows affected: {result.rowcount}")
 
-        logger.info(f"✅ Q6 Scene Advance SUCCESS - {previous_scene} → {new_scene_num} ('{new_scene.title}')")
+        logger.info(f"SUCCESS: Q6 Scene Advance SUCCESS - {previous_scene} → {new_scene_num} ('{new_scene.title}')")
 
         # Update NPC memory blocks with new scene context
         try:
@@ -1478,7 +1478,7 @@ async def advance_scene_manually(
             )
         except Exception as e:
             # Don't fail the entire scene transition if memory update fails
-            logger.error(f"  ⚠️ Failed to update scene memories: {e}", exc_info=True)
+            logger.error(f"  WARNING: Failed to update scene memories: {e}", exc_info=True)
 
         return {
             "success": True,
@@ -1491,7 +1491,7 @@ async def advance_scene_manually(
         }
 
     except ValueError as e:
-        logger.error(f"❌ Q6 Manual Scene Advance FAILED (ValueError): {e}")
+        logger.error(f"ERROR: Q6 Manual Scene Advance FAILED (ValueError): {e}")
         logger.debug(f"  Context - Session: {session_id}, User: {actor.id}")
         return JSONResponse(
             status_code=404,
@@ -1499,7 +1499,7 @@ async def advance_scene_manually(
         )
 
     except Exception as e:
-        logger.error(f"❌ Q6 Manual Scene Advance FAILED (Exception): {e}", exc_info=True)
+        logger.error(f"ERROR: Q6 Manual Scene Advance FAILED (Exception): {e}", exc_info=True)
         logger.debug(f"  Context - Session: {session_id}, User: {actor.id}")
         return JSONResponse(
             status_code=500,
@@ -1578,21 +1578,21 @@ async def skip_beat_manually(
     try:
         session_manager = SessionManager()
         story_manager = StoryManager()
-        logger.debug(f"  ✓ Managers initialized")
+        logger.debug(f"  OK: Managers initialized")
 
         # Get session
         session = await session_manager._get_session_by_id(session_id, actor)
         if not session:
             logger.warning(f"  ✗ Session not found: {session_id}")
             raise ValueError(f"Session '{session_id}' not found")
-        logger.debug(f"  ✓ Session retrieved - Scene: {session.state.current_scene_number}")
+        logger.debug(f"  OK: Session retrieved - Scene: {session.state.current_scene_number}")
 
         # Get story
         story = await story_manager.get_story(session.story_id, actor)
         if not story:
             logger.warning(f"  ✗ Story not found: {session.story_id}")
             raise ValueError(f"Story '{session.story_id}' not found")
-        logger.debug(f"  ✓ Story retrieved - '{story.title}'")
+        logger.debug(f"  OK: Story retrieved - '{story.title}'")
 
         # Find beat in current scene
         current_scene_num = session.state.current_scene_number
@@ -1635,7 +1635,7 @@ async def skip_beat_manually(
                 },
             )
 
-        logger.debug(f"  ✓ Beat found - Type: {beat_type}, Priority: {beat_found.get('priority', 'required')}")
+        logger.debug(f"  OK: Beat found - Type: {beat_type}, Priority: {beat_found.get('priority', 'required')}")
 
         # Check if already completed
         completed_list = {
@@ -1645,7 +1645,7 @@ async def skip_beat_manually(
         }[beat_type]
 
         if beat_id in completed_list:
-            logger.warning(f"  ⚠️ Beat already completed: {beat_id}")
+            logger.warning(f"  WARNING: Beat already completed: {beat_id}")
             return JSONResponse(
                 status_code=400,
                 content={
@@ -1656,7 +1656,7 @@ async def skip_beat_manually(
             )
 
         # Mark beat as completed
-        logger.info(f"  ⏭️ Skipping beat: {beat_id} ({beat_type})")
+        logger.info(f"  SKIP: Skipping beat: {beat_id} ({beat_type})")
         completed_list.append(beat_id)
 
         # Calculate new progress
@@ -1665,7 +1665,7 @@ async def skip_beat_manually(
         dialogue_manager = DialogueManager()
         scene_complete, progress = dialogue_manager._check_scene_completion(current_scene, session.state.completed_dialogue_beats)
 
-        logger.debug(f"  ✓ Beat marked complete - Progress: {progress:.2%}, Scene complete: {scene_complete}")
+        logger.debug(f"  OK: Beat marked complete - Progress: {progress:.2%}, Scene complete: {scene_complete}")
 
         # Save to database (Q7 FIX: Fetch and modify ORM object directly)
         logger.debug(f"  → Saving to database...")
@@ -1692,9 +1692,9 @@ async def skip_beat_manually(
                 session_orm.state = state_dict
 
                 # SQLAlchemy will auto-commit on context exit
-                logger.debug(f"  ✓ Database updated via ORM object modification")
+                logger.debug(f"  OK: Database updated via ORM object modification")
 
-        logger.info(f"✅ Q7 Beat Skip SUCCESS - {beat_id} ({beat_type}) - Progress: {progress:.2%}")
+        logger.info(f"SUCCESS: Q7 Beat Skip SUCCESS - {beat_id} ({beat_type}) - Progress: {progress:.2%}")
 
         return {
             "success": True,
@@ -1711,7 +1711,7 @@ async def skip_beat_manually(
         }
 
     except ValueError as e:
-        logger.error(f"❌ Q7 Beat Skip FAILED (ValueError): {e}")
+        logger.error(f"ERROR: Q7 Beat Skip FAILED (ValueError): {e}")
         logger.debug(f"  Context - Session: {session_id}, Beat: {beat_id}, User: {actor.id}")
         return JSONResponse(
             status_code=404,
@@ -1723,7 +1723,7 @@ async def skip_beat_manually(
         )
 
     except Exception as e:
-        logger.error(f"❌ Q7 Beat Skip FAILED (Exception): {e}", exc_info=True)
+        logger.error(f"ERROR: Q7 Beat Skip FAILED (Exception): {e}", exc_info=True)
         logger.debug(f"  Context - Session: {session_id}, Beat: {beat_id}, User: {actor.id}")
         return JSONResponse(
             status_code=500,
@@ -1805,11 +1805,11 @@ async def get_story_details(
         session_manager = SessionManager()
         response = await session_manager.get_story_details(story_id, actor)
 
-        logger.info(f"✅ Story details retrieved: {story_id}")
+        logger.info(f"SUCCESS: Story details retrieved: {story_id}")
         return response
 
     except ValueError as e:
-        logger.error(f"❌ Story not found: {e}")
+        logger.error(f"ERROR: Story not found: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -1825,7 +1825,7 @@ async def get_story_details(
 
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"❌ Error retrieving story: {e}", exc_info=True)
+        logger.error(f"ERROR: Error retrieving story: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -1898,7 +1898,7 @@ async def validate_session(
         session = await session_manager._get_session_by_id(session_id, actor)
         
         if not session:
-            logger.warning(f"  ❌ Session not found: {session_id}")
+            logger.warning(f"  ERROR: Session not found: {session_id}")
             return JSONResponse(
                 status_code=200,  # 200 for validation endpoint, not 404
                 content={
@@ -1913,7 +1913,7 @@ async def validate_session(
                 },
             )
         
-        logger.info(f"  ✅ Session is valid: {session_id}")
+        logger.info(f"  SUCCESS: Session is valid: {session_id}")
         return {
             "valid": True,
             "session_id": session.session_id,
@@ -1924,7 +1924,7 @@ async def validate_session(
         }
     
     except Exception as e:
-        logger.error(f"❌ Session validation error: {e}", exc_info=True)
+        logger.error(f"ERROR: Session validation error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
@@ -2011,11 +2011,11 @@ async def get_recent_messages(
             server=server,
         )
         
-        logger.info(f"✅ Retrieved {len(messages)} recent messages for session: {session_id}")
+        logger.info(f"SUCCESS: Retrieved {len(messages)} recent messages for session: {session_id}")
         return messages
     
     except ValueError as e:
-        logger.error(f"❌ Session not found: {e}")
+        logger.error(f"ERROR: Session not found: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -2030,7 +2030,7 @@ async def get_recent_messages(
         )
     
     except Exception as e:
-        logger.error(f"❌ Failed to retrieve recent messages: {e}", exc_info=True)
+        logger.error(f"ERROR: Failed to retrieve recent messages: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -2154,11 +2154,11 @@ async def get_session_state(
         session_manager = SessionManager()
         response = await session_manager.get_session_state(session_id, actor)
 
-        logger.info(f"✅ Session state retrieved: {session_id}")
+        logger.info(f"SUCCESS: Session state retrieved: {session_id}")
         return response
 
     except ValueError as e:
-        logger.error(f"❌ Session not found: {e}")
+        logger.error(f"ERROR: Session not found: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -2174,7 +2174,7 @@ async def get_session_state(
 
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"❌ Error retrieving session state: {e}", exc_info=True)
+        logger.error(f"ERROR: Error retrieving session state: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -2259,7 +2259,7 @@ async def get_relationship_status(
         # Get session
         session = await session_manager._get_session_by_id(session_id, actor)
         if not session:
-            logger.error(f"❌ Session not found: {session_id}")
+            logger.error(f"ERROR: Session not found: {session_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={
@@ -2276,7 +2276,7 @@ async def get_relationship_status(
         # Get story to find defined relationships
         story = await session_manager.story_manager.get_story(session.story_id, actor)
         if not story:
-            logger.error(f"❌ Story not found: {session.story_id}")
+            logger.error(f"ERROR: Story not found: {session.story_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={
@@ -2296,7 +2296,7 @@ async def get_relationship_status(
             relationships_defined = [rel.relationship_id for rel in story.relationships if rel.relationship_id]
         
         logger.info(
-            f"✅ Relationship status retrieved: {session_id} "
+            f"SUCCESS: Relationship status retrieved: {session_id} "
             f"({len(relationship_points)} relationships, {len(relationships_defined)} defined)"
         )
         
@@ -2312,7 +2312,7 @@ async def get_relationship_status(
     
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"❌ Error retrieving relationship status: {e}", exc_info=True)
+        logger.error(f"ERROR: Error retrieving relationship status: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -2344,7 +2344,7 @@ async def story_health():
         "features": {
             "story_upload": "enabled",
             "session_management": "enabled",
-            "dialogue_generation": "enabled",  # ✅ NOW ENABLED!
+            "dialogue_generation": "enabled",  # SUCCESS: NOW ENABLED!
         },
         "version": "1.0.0",
         "dialogue_config": {

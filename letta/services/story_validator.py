@@ -473,7 +473,7 @@ class StoryValidator:
                 continue
             
             # Validate based on type
-            if req_type == "choice_made":
+            if req_type in ["choice_made", "player_choice"]:  # Support both for compatibility
                 choice_id = conditional.get("choice_id")
                 if choice_id is None:
                     errors.append(ValidationError(
