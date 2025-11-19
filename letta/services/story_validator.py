@@ -111,8 +111,8 @@ class StoryValidator:
             ))
             return errors  # Can't continue without characters
         
-        # Check for main character
-        main_chars = [c for c in characters if c.get("isMainCharacter")]
+        # Check for main character (support both camelCase and snake_case)
+        main_chars = [c for c in characters if c.get("isMainCharacter") or c.get("is_main_character")]
         if len(main_chars) == 0:
             errors.append(ValidationError(
                 error_type="no_main_character",
@@ -199,8 +199,9 @@ class StoryValidator:
                     suggestion=f"Character '{char_name}' not in characters array. Add it or fix the name."
                 ))
             
-            # Check required fields
-            if not rel.get("pointsPerLevel"):
+            # Check required fields (support both camelCase and snake_case)
+            points_per_level = rel.get("pointsPerLevel") or rel.get("points_per_level")
+            if not points_per_level:
                 errors.append(ValidationError(
                     error_type="missing_points_per_level",
                     message=f"Relationship {idx + 1} ({char_name}-{rel_type}) missing 'pointsPerLevel'",
@@ -208,16 +209,17 @@ class StoryValidator:
                     severity="error",
                     suggestion="Add 'pointsPerLevel' field (e.g., 50)"
                 ))
-            elif rel.get("pointsPerLevel") <= 0:
+            elif points_per_level <= 0:
                 errors.append(ValidationError(
                     error_type="invalid_points_per_level",
                     message=f"Relationship {idx + 1}: 'pointsPerLevel' must be positive",
                     location=f"relationships[{idx}].pointsPerLevel",
                     severity="error",
-                    suggestion=f"Change pointsPerLevel to a positive number (currently {rel.get('pointsPerLevel')})"
+                    suggestion=f"Change pointsPerLevel to a positive number (currently {points_per_level})"
                 ))
             
-            if not rel.get("maxLevels"):
+            max_levels = rel.get("maxLevels") or rel.get("max_levels")
+            if not max_levels:
                 errors.append(ValidationError(
                     error_type="missing_max_levels",
                     message=f"Relationship {idx + 1} ({char_name}-{rel_type}) missing 'maxLevels'",
@@ -225,16 +227,16 @@ class StoryValidator:
                     severity="error",
                     suggestion="Add 'maxLevels' field (e.g., 5)"
                 ))
-            elif rel.get("maxLevels") <= 0:
+            elif max_levels <= 0:
                 errors.append(ValidationError(
                     error_type="invalid_max_levels",
                     message=f"Relationship {idx + 1}: 'maxLevels' must be positive",
                     location=f"relationships[{idx}].maxLevels",
                     severity="error",
-                    suggestion=f"Change maxLevels to a positive number (currently {rel.get('maxLevels')})"
+                    suggestion=f"Change maxLevels to a positive number (currently {max_levels})"
                 ))
             
-            starting_points = rel.get("startingPoints")
+            starting_points = rel.get("startingPoints") if rel.get("startingPoints") is not None else rel.get("starting_points")
             if starting_points is None:
                 errors.append(ValidationError(
                     error_type="missing_starting_points",
@@ -421,8 +423,8 @@ class StoryValidator:
                         suggestion="Add 'text' field with choice description"
                     ))
                 
-                # Validate relationship effects
-                rel_effects = choice.get("relationshipEffects", [])
+                # Validate relationship effects (support both camelCase and snake_case)
+                rel_effects = choice.get("relationshipEffects") or choice.get("relationship_effects") or []
                 for effect_idx, effect in enumerate(rel_effects):
                     char_name = effect.get("character")
                     rel_type = effect.get("type")
