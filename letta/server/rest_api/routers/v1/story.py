@@ -38,6 +38,7 @@ from letta.server.rest_api.utils import get_letta_server
 from letta.server.server import SyncServer  # Import for type hints (use string annotation in function signatures)
 from letta.services.session_manager import SessionManager
 from letta.services.story_manager import StoryManager
+from letta.services.story_validator import StoryValidator
 
 logger = get_logger(__name__)
 
@@ -121,6 +122,56 @@ async def upload_story(
     logger.info(f"📤 Story upload request: {story.title} (user: {actor.id}, overwrite={overwrite})")
     
     try:
+        # IMM-10: Validate story before processing
+        logger.info("🔍 Running story validation...")
+        validator = StoryValidator()
+        story_dict = story.model_dump()
+        validation_errors = validator.validate_story(story_dict)
+        
+        # Separate errors and warnings
+        errors_only = [e for e in validation_errors if e.severity == "error"]
+        warnings_only = [e for e in validation_errors if e.severity == "warning"]
+        
+        # If there are errors, return helpful error response
+        if errors_only:
+            logger.error(f"❌ Story validation failed: {len(errors_only)} errors, {len(warnings_only)} warnings")
+            
+            error_messages = []
+            for error in errors_only:
+                error_messages.append({
+                    "type": error.error_type,
+                    "message": error.message,
+                    "location": error.location,
+                    "suggestion": error.suggestion,
+                })
+            
+            warning_messages = []
+            for warning in warnings_only:
+                warning_messages.append({
+                    "type": warning.error_type,
+                    "message": warning.message,
+                    "location": warning.location,
+                    "suggestion": warning.suggestion,
+                })
+            
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "STORY_VALIDATION_FAILED",
+                    "message": f"Story has {len(errors_only)} validation error(s)",
+                    "errors": error_messages,
+                    "warnings": warning_messages,
+                }
+            )
+        
+        # Log warnings if any
+        if warnings_only:
+            logger.warning(f"⚠️ Story validation passed with {len(warnings_only)} warning(s)")
+            for warning in warnings_only:
+                logger.warning(f"  - {warning.message} ({warning.location})")
+        else:
+            logger.info("✅ Story validation passed with no errors or warnings")
+        
         story_manager = StoryManager()
         
         # If overwrite=true, delete existing story first

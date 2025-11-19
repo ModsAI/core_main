@@ -1300,7 +1300,45 @@ class SessionManager:
                 "instruction_details": None,
             }
 
-        # Get current scene
+        # IMM-11: Check for scene conditionals (multiple endings support)
+        # Skip scenes with unmet conditionals
+        while current_scene_num <= len(story.scenes):
+            current_scene = story.scenes[current_scene_num - 1]
+            
+            # Check if scene has conditional
+            if current_scene.conditional:
+                condition_met = self.evaluate_conditional(current_scene.conditional, session_state)
+                
+                if not condition_met:
+                    logger.info(
+                        f"  🔀 Scene {current_scene_num} conditional NOT met - skipping to next scene"
+                    )
+                    current_scene_num += 1
+                    session_state.current_scene_number = current_scene_num
+                    session_state.current_instruction_index = 0
+                    continue
+            
+            # Scene conditional passed (or no conditional) - use this scene
+            break
+        
+        # Check if we skipped past all scenes
+        if current_scene_num > len(story.scenes):
+            return {
+                "type": "end",
+                "beat_id": None,
+                "beat_number": None,
+                "global_beat_number": None,
+                "character": None,
+                "model": None,
+                "topic": "Story Complete",
+                "script_text": "The story has ended.",
+                "is_completed": True,
+                "priority": None,
+                "requires_beats": [],
+                "instruction_details": None,
+            }
+        
+        # Get current scene (after conditional checks)
         current_scene = story.scenes[current_scene_num - 1]
 
         # Q5: Collect all beat types with their completion status
@@ -1345,6 +1383,28 @@ class SessionManager:
                     priority = beat.get("priority", "required")
                     logger.debug(f"  ⏭️ Skipping {beat_type} {beat_id} - dependencies not met: {requires_beats} " f"(priority: {priority})")
                     continue  # Try next beat
+
+                # IMM-11: Check instruction conditional
+                if beat.get("conditional"):
+                    condition_met = self.evaluate_conditional(beat["conditional"], session_state)
+                    
+                    if not condition_met:
+                        # Conditional not met
+                        if beat["conditional"].hide_if_not_met:
+                            logger.debug(
+                                f"  🔀 Skipping {beat_type} {beat_id} - conditional not met (hide_if_not_met=True)"
+                            )
+                            continue  # Skip this beat
+                        
+                        if beat["conditional"].jump_to_scene:
+                            jump_scene = beat["conditional"].jump_to_scene
+                            logger.info(
+                                f"  🔀 Conditional not met - jumping to scene {jump_scene}"
+                            )
+                            session_state.current_scene_number = jump_scene
+                            session_state.current_instruction_index = 0
+                            # Recursively get instruction from new scene
+                            return self._get_next_instruction(story, session_state)
 
                 # Dependencies satisfied! Return this beat
                 global_beat_number = beat.get("global_beat_number")
@@ -1908,6 +1968,119 @@ class SessionManager:
             logger.info(
                 f"  💝 Relationship '{rel_id}': {current_points} → {new_points} points{level_change}"
         )
+
+    # ============================================================
+    # Story Branching Logic (IMM-11)
+    # ============================================================
+
+    def evaluate_conditional(
+        self,
+        conditional: "InstructionConditional",
+        session_state: SessionState,
+    ) -> bool:
+        """
+        Evaluate if conditional requirement is met for story branching.
+        
+        Enables:
+        - Multiple endings based on relationships/choices
+        - Skip instructions based on conditions
+        - Jump to different story paths
+        
+        Args:
+            conditional: The conditional to evaluate
+            session_state: Current session state with choices/relationships
+            
+        Returns:
+            True if condition is met (or no condition exists)
+            False if condition is not met
+        """
+        from letta.schemas.story import InstructionConditional
+        
+        if not conditional:
+            return True  # No condition = always pass
+        
+        if conditional.requirement_type == "relationship_level":
+            # Check if relationship meets level requirement
+            for rel_level in session_state.relationship_levels:
+                if rel_level.id == conditional.relationship_id:
+                    level = rel_level.level
+                    
+                    # Check min_level
+                    if conditional.min_level is not None and level < conditional.min_level:
+                        logger.debug(
+                            f"  🔀 Conditional FAILED: {conditional.relationship_id} "
+                            f"level {level} < required {conditional.min_level}"
+                        )
+                        return False
+                    
+                    # Check max_level
+                    if conditional.max_level is not None and level > conditional.max_level:
+                        logger.debug(
+                            f"  🔀 Conditional FAILED: {conditional.relationship_id} "
+                            f"level {level} > max {conditional.max_level}"
+                        )
+                        return False
+                    
+                    logger.debug(
+                        f"  ✅ Conditional PASSED: {conditional.relationship_id} level {level}"
+                    )
+                    return True
+            
+            # Relationship not found
+            logger.debug(
+                f"  🔀 Conditional FAILED: Relationship '{conditional.relationship_id}' not found"
+            )
+            return False
+        
+        elif conditional.requirement_type == "choice_made":
+            # Check if player made specific choice
+            for choice in session_state.player_choices:
+                if choice.get("choice_id") == conditional.choice_id:
+                    logger.debug(
+                        f"  ✅ Conditional PASSED: Player made choice {conditional.choice_id}"
+                    )
+                    return True
+            
+            logger.debug(
+                f"  🔀 Conditional FAILED: Player did not make choice {conditional.choice_id}"
+            )
+            return False
+        
+        elif conditional.requirement_type == "all":
+            # All sub-conditions must pass
+            if not conditional.sub_conditions:
+                return True
+            
+            for i, sub_cond in enumerate(conditional.sub_conditions):
+                if not self.evaluate_conditional(sub_cond, session_state):
+                    logger.debug(
+                        f"  🔀 Conditional FAILED: 'all' check - sub-condition {i} failed"
+                    )
+                    return False
+            
+            logger.debug("  ✅ Conditional PASSED: All sub-conditions met")
+            return True
+        
+        elif conditional.requirement_type == "any":
+            # At least one sub-condition must pass
+            if not conditional.sub_conditions:
+                return True
+            
+            for sub_cond in conditional.sub_conditions:
+                if self.evaluate_conditional(sub_cond, session_state):
+                    logger.debug("  ✅ Conditional PASSED: At least one sub-condition met")
+                    return True
+            
+            logger.debug(
+                "  🔀 Conditional FAILED: No sub-conditions passed for 'any' check"
+            )
+            return False
+        
+        # Unknown requirement type - default to True (safe fallback)
+        logger.warning(
+            f"  ⚠️ Unknown conditional requirement_type: {conditional.requirement_type}"
+        )
+        return True
 
     async def update_session_state_with_version(
         self,

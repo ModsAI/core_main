@@ -85,6 +85,11 @@ class StoryInstruction(BaseModel):
     # Multiple choice support (for Unity choice selections)
     choices: Optional[List["StoryChoice"]] = Field(None, description="Multiple choice options with optional relationship effects")
 
+    # Branching support (IMM-11) - OPTIONAL field for backward compatibility
+    conditional: Optional["InstructionConditional"] = Field(
+        None, description="Optional conditional logic for story branching"
+    )
+
 
 # ============================================================
 # Relationship System Models (for Kon's Unity Integration)
@@ -167,6 +172,49 @@ class StoryChoice(BaseModel):
         populate_by_name = True
 
 
+# ============================================================
+# Story Branching Models (IMM-11)
+# ============================================================
+
+
+class InstructionConditional(BaseModel):
+    """
+    Conditional logic for story branching.
+    
+    Enables:
+    - Multiple endings based on choices/relationships
+    - Skip instructions based on conditions
+    - Jump to different scenes
+    
+    NOTE: This is an OPTIONAL field - stories without conditionals work unchanged.
+    """
+
+    requirement_type: Literal["relationship_level", "choice_made", "all", "any"] = Field(
+        ..., description="Type of condition to check"
+    )
+
+    # For relationship_level checks
+    relationship_id: Optional[str] = Field(None, description="Relationship ID (e.g., 'emma-romance')")
+    min_level: Optional[int] = Field(None, description="Minimum required relationship level")
+    max_level: Optional[int] = Field(None, description="Maximum allowed relationship level")
+
+    # For choice_made checks
+    choice_id: Optional[int] = Field(None, description="Choice ID that must have been selected")
+
+    # For all/any (compound conditions)
+    sub_conditions: Optional[List["InstructionConditional"]] = Field(
+        None, description="Sub-conditions for 'all' or 'any' checks"
+    )
+
+    # Actions when condition NOT met
+    skip_if_not_met: bool = Field(False, description="Skip this instruction if condition not met")
+    jump_to_scene: Optional[int] = Field(None, description="Jump to scene number if condition not met")
+    hide_if_not_met: bool = Field(False, description="Hide this instruction if condition not met")
+
+    class Config:
+        populate_by_name = True
+
+
 class StoryUpload(BaseModel):
     """Request to upload a new story"""
 
@@ -204,6 +252,11 @@ class Scene(BaseModel):
     # Q5: Track narrations and actions as checkpoints
     narration_beats: List[Dict[str, Any]] = Field(default_factory=list, description="Narration checkpoints to track (Q5)")
     action_beats: List[Dict[str, Any]] = Field(default_factory=list, description="Action checkpoints to track (Q5)")
+
+    # Branching support (IMM-11) - OPTIONAL for backward compatibility
+    conditional: Optional["InstructionConditional"] = Field(
+        None, description="Optional conditional logic for multiple endings"
+    )
 
 
 class Story(BaseModel):
