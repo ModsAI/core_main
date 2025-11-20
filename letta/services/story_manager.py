@@ -35,7 +35,7 @@ class StoryManager:
     """
 
     def __init__(self):
-        logger.info("📚 StoryManager initialized")
+        logger.info("StoryManager initialized")
 
     async def upload_story(
         self,
@@ -64,7 +64,7 @@ class StoryManager:
             IntegrityError: Story ID already exists
             Exception: Other database/processing errors
         """
-        logger.info(f"📤 Uploading story: {story_upload.title} (ID: {story_upload.id})")
+        logger.info(f" Uploading story: {story_upload.title} (ID: {story_upload.id})")
         
         try:
             # Step 1: Generate story_id
@@ -72,19 +72,19 @@ class StoryManager:
             
             # Step 2: Process characters (add character_id)
             characters = self._process_characters(story_upload.characters)
-            logger.debug(f"✅ Processed {len(characters)} characters")
+            logger.debug(f"SUCCESS: Processed {len(characters)} characters")
             
             # Step 3: Process relationships (add relationship_id, validate)
             relationships = self._process_relationships(story_upload.relationships, characters)
             if relationships:
-                logger.debug(f"✅ Processed {len(relationships)} relationships")
+                logger.debug(f"SUCCESS: Processed {len(relationships)} relationships")
             
             # Step 4: Validate relationship effects in choices
             self._validate_relationship_effects(story_upload.instructions, relationships)
             
             # Step 5: Parse instructions into scenes
             scenes = self._parse_scenes(story_upload.instructions, characters)
-            logger.debug(f"✅ Parsed {len(scenes)} scenes")
+            logger.debug(f"SUCCESS: Parsed {len(scenes)} scenes")
             
             # Step 6: Validate scene structure
             self._validate_scenes(scenes)
@@ -98,7 +98,7 @@ class StoryManager:
                     existing_story = result.scalar_one_or_none()
                     
                     if existing_story:
-                        logger.error(f"❌ Story ID '{story_id}' already exists")
+                        logger.error(f"ERROR: Story ID '{story_id}' already exists")
                         raise IntegrityError(f"Story ID '{story_id}' already exists", None, None)
                     
                     # Create ORM object
@@ -136,7 +136,7 @@ class StoryManager:
                     await session.flush()
                     await session.refresh(story_orm)
                 
-                logger.info(f"✅ Successfully uploaded story: {story_upload.title}")
+                logger.info(f"SUCCESS: Successfully uploaded story: {story_upload.title}")
                 
                 return StoryUploadResponse(
                     success=True,
@@ -154,19 +154,19 @@ class StoryManager:
                 )
         
         except IntegrityError as e:
-            logger.error(f"❌ Story upload failed (duplicate): {e}")
+            logger.error(f"ERROR: Story upload failed (duplicate): {e}")
             raise ValueError(f"Story with ID {story_upload.id} already exists") from e
         
         except ValueError as e:
-            logger.error(f"❌ Story upload failed (validation): {e}")
+            logger.error(f"ERROR: Story upload failed (validation): {e}")
             raise
         
         except SQLAlchemyError as e:
-            logger.error(f"❌ Story upload failed (database): {e}", exc_info=True)
+            logger.error(f"ERROR: Story upload failed (database): {e}", exc_info=True)
             raise Exception(f"Database error during story upload: {str(e)}") from e
         
         except Exception as e:
-            logger.error(f"❌ Story upload failed (unexpected): {e}", exc_info=True)
+            logger.error(f"ERROR: Story upload failed (unexpected): {e}", exc_info=True)
             raise Exception(f"Failed to upload story: {str(e)}") from e
 
     async def get_story(
@@ -184,7 +184,7 @@ class StoryManager:
         Returns:
             Story object or None if not found
         """
-        logger.debug(f"🔍 Getting story: {story_id}")
+        logger.debug(f"DEBUG: Getting story: {story_id}")
         
         try:
             async with db_registry.async_session() as session:
@@ -197,7 +197,7 @@ class StoryManager:
                     story_orm = result.scalar_one_or_none()
                     
                     if not story_orm:
-                        logger.warning(f"❌ Story not found: {story_id}")
+                        logger.warning(f"ERROR: Story not found: {story_id}")
                         return None
                     
                     # Convert to schema
@@ -219,11 +219,11 @@ class StoryManager:
                         metadata=story_orm.story_metadata or {},
                     )
                     
-                    logger.debug(f"✅ Found story: {story.title}")
+                    logger.debug(f"SUCCESS: Found story: {story.title}")
                     return story
         
         except Exception as e:
-            logger.error(f"❌ Failed to get story {story_id}: {e}", exc_info=True)
+            logger.error(f"ERROR: Failed to get story {story_id}: {e}", exc_info=True)
             return None
 
     async def delete_story(
@@ -241,7 +241,7 @@ class StoryManager:
         Returns:
             True if deleted, False if not found or error
         """
-        logger.info(f"🗑️ Deleting story: {story_id}")
+        logger.info(f"Deleting story: {story_id}")
 
         try:
             from sqlalchemy import delete
@@ -256,14 +256,14 @@ class StoryManager:
                     result = await session.execute(delete_stmt)
 
                     if result.rowcount > 0:
-                        logger.info(f"✅ Story deleted: {story_id}")
+                        logger.info(f"SUCCESS: Story deleted: {story_id}")
                         return True
                     else:
-                        logger.warning(f"❌ Story not found for deletion: {story_id}")
+                        logger.warning(f"ERROR: Story not found for deletion: {story_id}")
                         return False
 
         except Exception as e:
-            logger.error(f"❌ Failed to delete story {story_id}: {e}", exc_info=True)
+            logger.error(f"ERROR: Failed to delete story {story_id}: {e}", exc_info=True)
             return False
 
     async def list_stories(
@@ -283,7 +283,7 @@ class StoryManager:
         Returns:
             Tuple of (story_list, total_count)
         """
-        logger.debug(f"📋 Listing stories (page={page}, page_size={page_size})")
+        logger.debug(f"LISTING: Listing stories (page={page}, page_size={page_size})")
         
         try:
             async with db_registry.async_session() as session:
@@ -340,11 +340,11 @@ class StoryManager:
                         }
                         stories.append(story_item)
                     
-                    logger.info(f"✅ Found {len(stories)} stories (total: {total})")
+                    logger.info(f"SUCCESS: Found {len(stories)} stories (total: {total})")
                     return stories, total
         
         except Exception as e:
-            logger.error(f"❌ Failed to list stories: {e}", exc_info=True)
+            logger.error(f"ERROR: Failed to list stories: {e}", exc_info=True)
             raise Exception(f"Failed to list stories: {str(e)}") from e
 
     def _process_characters(self, characters: List[StoryCharacter]) -> List[StoryCharacter]:
@@ -380,7 +380,7 @@ class StoryManager:
             )
             processed.append(processed_char)
             
-            logger.debug(f"  📝 Character: {char.name} → {char_id}")
+            logger.debug(f"  CHARACTER: {char.name} -> {char_id}")
         
         return processed
 
@@ -437,9 +437,9 @@ class StoryManager:
             )
             processed.append(processed_rel)
 
-            logger.debug(f"  💝 Relationship: {rel.character} ({rel.type}) → {rel_id}")
+            logger.debug(f"  RELATIONSHIP: {rel.character} ({rel.type}) -> {rel_id}")
 
-        logger.info(f"✅ Processed {len(processed)} relationship(s)")
+        logger.info(f"SUCCESS: Processed {len(processed)} relationship(s)")
         return processed
 
     def _validate_relationship_effects(
@@ -489,7 +489,7 @@ class StoryManager:
                             f"Add this relationship to the story's 'relationships' array."
                         )
 
-        logger.debug("✅ All relationshipEffects validated successfully")
+        logger.debug("SUCCESS: All relationshipEffects validated successfully")
 
     def _parse_scenes(
         self,
@@ -508,7 +508,7 @@ class StoryManager:
         Returns:
             List of scenes
         """
-        logger.debug("🎬 Parsing scenes from instructions...")
+        logger.debug("PARSING: Parsing scenes from instructions...")
         
         scenes = []
         current_scene = None
@@ -535,7 +535,7 @@ class StoryManager:
                     dialogue_beats=[],
                 )
                 
-                logger.debug(f"  🎬 Scene {scene_number}: {current_scene.title}")
+                logger.debug(f"  SCENE: Scene {scene_number}: {current_scene.title}")
             
             elif instruction.type == "end":
                 # End of story
@@ -595,7 +595,7 @@ class StoryManager:
                         current_scene.dialogue_beats.append(dialogue_beat)
                         
                         logger.debug(
-                            f"    💬 Beat {beat_id} (global #{global_beat_number}): "
+                            f"    DIALOGUE: Beat {beat_id} (global #{global_beat_number}): "
                             f"{instruction.character} - {topic[:30]}... [{priority}]"
                             + (f" emotion={instruction.emotion}" if instruction.emotion else "")
                         )
@@ -641,7 +641,7 @@ class StoryManager:
                         logger.info(f"    DEBUG: Scene now has {len(current_scene.narration_beats)} narration beats")
                         
                         logger.info(
-                            f"    📖 Narration {narration_id} (global #{global_beat_number}): "
+                            f"    NARRATION: Narration {narration_id} (global #{global_beat_number}): "
                             f"{instruction.text[:30] if instruction.text else 'N/A'}... [{priority}] "
                             f"CHOICES={instruction.choices}"
                         )
@@ -675,7 +675,7 @@ class StoryManager:
                         current_scene.action_beats.append(action_beat)
                         
                         logger.debug(
-                            f"    🎬 Action {action_id} (global #{global_beat_number}): "
+                            f"    ACTION: Action {action_id} (global #{global_beat_number}): "
                             f"{instruction.character or 'N/A'} - {(instruction.action or instruction.text or '')[:30]}... [{priority}]"
                         )
         
@@ -685,7 +685,7 @@ class StoryManager:
             if not current_scene.characters:
                 npc_names = [char.name.lower() for char in characters if not char.is_main_character]
                 current_scene.characters = npc_names
-                logger.info(f"  ℹ️ Scene {current_scene.scene_number} had no explicit characters, defaulting to all NPCs: {npc_names}")
+                logger.info(f"  INFO: Scene {current_scene.scene_number} had no explicit characters, defaulting to all NPCs: {npc_names}")
             
             scenes.append(current_scene)
         
@@ -694,7 +694,7 @@ class StoryManager:
             if not scene.characters:
                 npc_names = [char.name.lower() for char in characters if not char.is_main_character]
                 scene.characters = npc_names
-                logger.info(f"  ℹ️ Scene {scene.scene_number} had no explicit characters, defaulting to all NPCs: {npc_names}")
+                logger.info(f"  INFO: Scene {scene.scene_number} had no explicit characters, defaulting to all NPCs: {npc_names}")
         
         # Count total beats by type (Q5)
         total_dialogue = sum(len(scene.dialogue_beats) for scene in scenes)
@@ -702,7 +702,7 @@ class StoryManager:
         total_action = sum(len(scene.action_beats) for scene in scenes)
         
         logger.debug(
-            f"✅ Parsed {len(scenes)} scenes with {global_beat_number} total checkpoints "
+            f"SUCCESS: Parsed {len(scenes)} scenes with {global_beat_number} total checkpoints "
             f"(Dialogue: {total_dialogue}, Narration: {total_narration}, Actions: {total_action})"
         )
         return scenes
@@ -745,6 +745,6 @@ class StoryManager:
                 raise ValueError(f"Scene {scene.scene_number} missing location")
             
             if not scene.instructions:
-                logger.warning(f"⚠️ Scene {scene.scene_number} has no instructions")
+                logger.warning(f"WARNING: Scene {scene.scene_number} has no instructions")
         
-        logger.debug(f"✅ Scene validation passed ({len(scenes)} scenes)")
+        logger.debug(f"SUCCESS: Scene validation passed ({len(scenes)} scenes)")

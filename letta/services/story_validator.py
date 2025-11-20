@@ -7,6 +7,9 @@ Provides helpful, actionable error messages to story authors.
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,18 +48,46 @@ class StoryValidator:
         """
         errors = []
         
-        # Collect data for cross-validation
-        self.character_names: Set[str] = set()
-        self.all_choice_ids: Set[int] = set()
-        self.all_relationship_ids: Set[str] = set()
-        
-        # Run all validation checks
-        errors.extend(self._validate_basic_structure(story_data))
-        errors.extend(self._validate_characters(story_data))
-        errors.extend(self._validate_relationships(story_data))
-        errors.extend(self._validate_instructions(story_data))
-        errors.extend(self._validate_choices(story_data))
-        errors.extend(self._validate_conditionals(story_data))
+        try:
+            logger.info("Starting story validation...")
+            
+            # Collect data for cross-validation
+            self.character_names: Set[str] = set()
+            self.all_choice_ids: Set[int] = set()
+            self.all_relationship_ids: Set[str] = set()
+            
+            # Run all validation checks
+            logger.info("Validating basic structure...")
+            errors.extend(self._validate_basic_structure(story_data))
+            
+            logger.info("Validating characters...")
+            errors.extend(self._validate_characters(story_data))
+            
+            logger.info("Validating relationships...")
+            errors.extend(self._validate_relationships(story_data))
+            
+            logger.info("Validating instructions...")
+            errors.extend(self._validate_instructions(story_data))
+            
+            logger.info("Validating choices...")
+            errors.extend(self._validate_choices(story_data))
+            
+            logger.info("Validating conditionals...")
+            errors.extend(self._validate_conditionals(story_data))
+            
+            logger.info(f"Validation complete. Found {len(errors)} errors/warnings")
+            
+        except Exception as e:
+            logger.error(f"CRITICAL: Validator crashed with exception: {type(e).__name__}: {e}")
+            logger.exception("Full traceback:")
+            # Create a critical error to return instead of crashing
+            errors.append(ValidationError(
+                error_type="validator_crash",
+                message=f"Internal validator error: {type(e).__name__}: {str(e)}",
+                location="validator",
+                severity="error",
+                suggestion="This is a bug in the validator. Please report this error."
+            ))
         
         return errors
     
@@ -64,34 +95,45 @@ class StoryValidator:
         """Validate basic story structure"""
         errors = []
         
-        # Check required top-level fields
-        if not story_data.get("id"):
-            errors.append(ValidationError(
-                error_type="missing_story_id",
-                message="Story must have an 'id' field",
-                location="root",
-                severity="error",
-                suggestion="Add 'id' field with a unique integer (e.g., 12345)"
-            ))
+        try:
+            # Check required top-level fields
+            if not story_data.get("id"):
+                errors.append(ValidationError(
+                    error_type="missing_story_id",
+                    message="Story must have an 'id' field",
+                    location="root",
+                    severity="error",
+                    suggestion="Add 'id' field with a unique integer (e.g., 12345)"
+                ))
+            
+            if not story_data.get("title"):
+                errors.append(ValidationError(
+                    error_type="missing_story_title",
+                    message="Story must have a 'title' field",
+                    location="root",
+                    severity="error",
+                    suggestion="Add 'title' field with story name"
+                ))
+            
+            # Check instructions exist
+            instructions = story_data.get("instructions", [])
+            if not instructions:
+                errors.append(ValidationError(
+                    error_type="no_instructions",
+                    message="Story must have at least one instruction",
+                    location="root",
+                    severity="error",
+                    suggestion="Add 'instructions' array with story content"
+                ))
         
-        if not story_data.get("title"):
+        except Exception as e:
+            logger.error(f"Error in _validate_basic_structure: {e}")
             errors.append(ValidationError(
-                error_type="missing_story_title",
-                message="Story must have a 'title' field",
-                location="root",
+                error_type="validation_error",
+                message=f"Error validating basic structure: {str(e)}",
+                location="basic_structure",
                 severity="error",
-                suggestion="Add 'title' field with story name"
-            ))
-        
-        # Check instructions exist
-        instructions = story_data.get("instructions", [])
-        if not instructions:
-            errors.append(ValidationError(
-                error_type="no_instructions",
-                message="Story must have at least one instruction",
-                location="root",
-                severity="error",
-                suggestion="Add 'instructions' array with story content"
+                suggestion="Check story JSON format"
             ))
         
         return errors
@@ -99,62 +141,79 @@ class StoryValidator:
     def _validate_characters(self, story_data: Dict) -> List[ValidationError]:
         """Validate character definitions"""
         errors = []
-        characters = story_data.get("characters", [])
         
-        if not characters:
-            errors.append(ValidationError(
-                error_type="no_characters",
-                message="Story must have at least one character",
-                location="root",
-                severity="error",
-                suggestion="Add 'characters' array with at least one character"
-            ))
-            return errors  # Can't continue without characters
-        
-        # Check for main character (support both camelCase and snake_case)
-        main_chars = [c for c in characters if c.get("isMainCharacter") or c.get("is_main_character")]
-        if len(main_chars) == 0:
-            errors.append(ValidationError(
-                error_type="no_main_character",
-                message="Story must have exactly one main character",
-                location="characters",
-                severity="error",
-                suggestion="Set 'isMainCharacter: true' for one character"
-            ))
-        elif len(main_chars) > 1:
-            errors.append(ValidationError(
-                error_type="multiple_main_characters",
-                message=f"Story has {len(main_chars)} main characters (must have exactly 1)",
-                location="characters",
-                severity="error",
-                suggestion="Set 'isMainCharacter: true' for only ONE character"
-            ))
-        
-        # Check for duplicate names
-        names = [c.get("name") for c in characters if c.get("name")]
-        duplicates = {name for name in names if names.count(name) > 1}
-        if duplicates:
-            errors.append(ValidationError(
-                error_type="duplicate_character_names",
-                message=f"Duplicate character names: {', '.join(duplicates)}",
-                location="characters",
-                severity="error",
-                suggestion="Each character must have a unique name"
-            ))
-        
-        # Store character names for reference validation
-        self.character_names = set(names)
-        
-        # Check required character fields
-        for idx, char in enumerate(characters):
-            if not char.get("name"):
+        try:
+            characters = story_data.get("characters", [])
+            logger.info(f"  Validating {len(characters)} characters...")
+            
+            if not characters:
                 errors.append(ValidationError(
-                    error_type="missing_character_name",
-                    message=f"Character {idx + 1} is missing 'name' field",
-                    location=f"characters[{idx}]",
+                    error_type="no_characters",
+                    message="Story must have at least one character",
+                    location="root",
                     severity="error",
-                    suggestion="Add 'name' field to character"
+                    suggestion="Add 'characters' array with at least one character"
                 ))
+                return errors  # Can't continue without characters
+            
+            # Check for main character (support both camelCase and snake_case)
+            main_chars = [c for c in characters if c.get("isMainCharacter") or c.get("is_main_character")]
+            logger.info(f"  Found {len(main_chars)} main character(s)")
+            
+            if len(main_chars) == 0:
+                errors.append(ValidationError(
+                    error_type="no_main_character",
+                    message="Story must have exactly one main character",
+                    location="characters",
+                    severity="error",
+                    suggestion="Set 'isMainCharacter: true' for one character"
+                ))
+            elif len(main_chars) > 1:
+                errors.append(ValidationError(
+                    error_type="multiple_main_characters",
+                    message=f"Story has {len(main_chars)} main characters (must have exactly 1)",
+                    location="characters",
+                    severity="error",
+                    suggestion="Set 'isMainCharacter: true' for only ONE character"
+                ))
+            
+            # Check for duplicate names
+            names = [c.get("name") for c in characters if c.get("name")]
+            duplicates = {name for name in names if names.count(name) > 1}
+            if duplicates:
+                errors.append(ValidationError(
+                    error_type="duplicate_character_names",
+                    message=f"Duplicate character names: {', '.join(duplicates)}",
+                    location="characters",
+                    severity="error",
+                    suggestion="Each character must have a unique name"
+                ))
+            
+            # Store character names for reference validation
+            self.character_names = set(names)
+            logger.info(f"  Character names: {self.character_names}")
+            
+            # Check required character fields
+            for idx, char in enumerate(characters):
+                if not char.get("name"):
+                    errors.append(ValidationError(
+                        error_type="missing_character_name",
+                        message=f"Character {idx + 1} is missing 'name' field",
+                        location=f"characters[{idx}]",
+                        severity="error",
+                        suggestion="Add 'name' field to character"
+                    ))
+        
+        except Exception as e:
+            logger.error(f"Error in _validate_characters: {e}")
+            logger.exception("Full traceback:")
+            errors.append(ValidationError(
+                error_type="validation_error",
+                message=f"Error validating characters: {str(e)}",
+                location="characters",
+                severity="error",
+                suggestion="Check characters array format"
+            ))
             
             if not char.get("age"):
                 errors.append(ValidationError(
@@ -200,8 +259,9 @@ class StoryValidator:
                 ))
             
             # Check required fields (support both camelCase and snake_case)
-            points_per_level = rel.get("pointsPerLevel") or rel.get("points_per_level")
-            if not points_per_level:
+            # Use 'is not None' checks to properly handle 0 values
+            points_per_level = rel.get("pointsPerLevel") if rel.get("pointsPerLevel") is not None else rel.get("points_per_level")
+            if points_per_level is None:
                 errors.append(ValidationError(
                     error_type="missing_points_per_level",
                     message=f"Relationship {idx + 1} ({char_name}-{rel_type}) missing 'pointsPerLevel'",
@@ -218,8 +278,8 @@ class StoryValidator:
                     suggestion=f"Change pointsPerLevel to a positive number (currently {points_per_level})"
                 ))
             
-            max_levels = rel.get("maxLevels") or rel.get("max_levels")
-            if not max_levels:
+            max_levels = rel.get("maxLevels") if rel.get("maxLevels") is not None else rel.get("max_levels")
+            if max_levels is None:
                 errors.append(ValidationError(
                     error_type="missing_max_levels",
                     message=f"Relationship {idx + 1} ({char_name}-{rel_type}) missing 'maxLevels'",
@@ -286,70 +346,84 @@ class StoryValidator:
     def _validate_instructions(self, story_data: Dict) -> List[ValidationError]:
         """Validate instruction definitions"""
         errors = []
-        instructions = story_data.get("instructions", [])
         
-        for idx, instruction in enumerate(instructions):
-            inst_type = instruction.get("type")
+        try:
+            instructions = story_data.get("instructions", [])
+            logger.info(f"  Validating {len(instructions)} instructions...")
             
-            # Check type is valid
-            valid_types = ["setting", "narration", "dialogue", "action", "end"]
-            if not inst_type:
-                errors.append(ValidationError(
-                    error_type="missing_instruction_type",
-                    message=f"Instruction {idx + 1} missing 'type' field",
-                    location=f"instructions[{idx}]",
-                    severity="error",
-                    suggestion=f"Add 'type' field (one of: {', '.join(valid_types)})"
-                ))
-            elif inst_type not in valid_types:
-                errors.append(ValidationError(
-                    error_type="invalid_instruction_type",
-                    message=f"Instruction {idx + 1} has invalid type '{inst_type}'",
-                    location=f"instructions[{idx}].type",
-                    severity="error",
-                    suggestion=f"Use one of: {', '.join(valid_types)}"
-                ))
-            
-            # Type-specific validation
-            if inst_type == "dialogue":
-                char_name = instruction.get("character")
-                if not char_name:
+            for idx, instruction in enumerate(instructions):
+                inst_type = instruction.get("type")
+                
+                # Check type is valid
+                valid_types = ["setting", "narration", "dialogue", "action", "end"]
+                if not inst_type:
                     errors.append(ValidationError(
-                        error_type="missing_dialogue_character",
-                        message=f"Instruction {idx + 1}: Dialogue instruction missing 'character' field",
+                        error_type="missing_instruction_type",
+                        message=f"Instruction {idx + 1} missing 'type' field",
                         location=f"instructions[{idx}]",
                         severity="error",
-                        suggestion="Add 'character' field with character name"
+                        suggestion=f"Add 'type' field (one of: {', '.join(valid_types)})"
                     ))
-                elif char_name not in self.character_names:
+                elif inst_type not in valid_types:
                     errors.append(ValidationError(
-                        error_type="invalid_character_reference",
-                        message=f"Instruction {idx + 1} references unknown character '{char_name}'",
-                        location=f"instructions[{idx}].character",
+                        error_type="invalid_instruction_type",
+                        message=f"Instruction {idx + 1} has invalid type '{inst_type}'",
+                        location=f"instructions[{idx}].type",
                         severity="error",
-                        suggestion=f"Add character '{char_name}' to characters array or fix the name"
+                        suggestion=f"Use one of: {', '.join(valid_types)}"
                     ))
-            
-            elif inst_type == "action":
-                char_name = instruction.get("character")
-                if char_name and char_name not in self.character_names:
-                    errors.append(ValidationError(
-                        error_type="invalid_character_reference",
-                        message=f"Instruction {idx + 1} references unknown character '{char_name}'",
-                        location=f"instructions[{idx}].character",
-                        severity="error",
-                        suggestion=f"Add character '{char_name}' to characters array or fix the name"
-                    ))
-            
-            elif inst_type in ["setting", "narration"]:
-                if not instruction.get("text"):
-                    errors.append(ValidationError(
-                        error_type="missing_instruction_text",
-                        message=f"Instruction {idx + 1}: {inst_type} instruction missing 'text' field",
-                        location=f"instructions[{idx}]",
-                        severity="error",
-                        suggestion="Add 'text' field with instruction content"
-                    ))
+                
+                # Type-specific validation
+                if inst_type == "dialogue":
+                    char_name = instruction.get("character")
+                    if not char_name:
+                        errors.append(ValidationError(
+                            error_type="missing_dialogue_character",
+                            message=f"Instruction {idx + 1}: Dialogue instruction missing 'character' field",
+                            location=f"instructions[{idx}]",
+                            severity="error",
+                            suggestion="Add 'character' field with character name"
+                        ))
+                    elif char_name not in self.character_names:
+                        errors.append(ValidationError(
+                            error_type="invalid_character_reference",
+                            message=f"Instruction {idx + 1} references unknown character '{char_name}'",
+                            location=f"instructions[{idx}].character",
+                            severity="error",
+                            suggestion=f"Add character '{char_name}' to characters array or fix the name"
+                        ))
+                
+                elif inst_type == "action":
+                    char_name = instruction.get("character")
+                    if char_name and char_name not in self.character_names:
+                        errors.append(ValidationError(
+                            error_type="invalid_character_reference",
+                            message=f"Instruction {idx + 1} references unknown character '{char_name}'",
+                            location=f"instructions[{idx}].character",
+                            severity="error",
+                            suggestion=f"Add character '{char_name}' to characters array or fix the name"
+                        ))
+                
+                elif inst_type in ["setting", "narration"]:
+                    if not instruction.get("text"):
+                        errors.append(ValidationError(
+                            error_type="missing_instruction_text",
+                            message=f"Instruction {idx + 1}: {inst_type} instruction missing 'text' field",
+                            location=f"instructions[{idx}]",
+                            severity="error",
+                            suggestion="Add 'text' field with instruction content"
+                        ))
+        
+        except Exception as e:
+            logger.error(f"Error in _validate_instructions: {e}")
+            logger.exception("Full traceback:")
+            errors.append(ValidationError(
+                error_type="validation_error",
+                message=f"Error validating instructions: {str(e)}",
+                location="instructions",
+                severity="error",
+                suggestion="Check instructions array format"
+            ))
         
         return errors
     

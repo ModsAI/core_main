@@ -146,10 +146,10 @@ class SessionManager:
             # Step 1: Get story
             story = await self.story_manager.get_story(session_create.story_id, actor)
             if not story:
-                logger.error(f"❌ Story not found: {session_create.story_id}")
+                logger.error(f"ERROR: Story not found: {session_create.story_id}")
                 raise ValueError(f"Story '{session_create.story_id}' not found")
 
-            logger.debug(f"✅ Found story: {story.title}")
+            logger.debug(f"SUCCESS: Found story: {story.title}")
 
             # Step 2: Check for existing session (ONE session per story per user)
             existing_session = await self._get_active_session(
@@ -160,7 +160,7 @@ class SessionManager:
 
             if existing_session:
                 logger.warning(
-                    f"⚠️ Active session exists for story {session_create.story_id}. " f"Deleting old session: {existing_session.session_id}"
+                    f"WARNING: Active session exists for story {session_create.story_id}. " f"Deleting old session: {existing_session.session_id}"
                 )
                 await self._delete_session_internal(existing_session.session_id, actor)
 
@@ -207,12 +207,12 @@ class SessionManager:
                 characters_in_scene=characters_in_first_scene,  # NEW - scene-based dialogue validation
             )
             
-            logger.debug(f"✅ Session state initialized with {len(relationship_points)} relationships")
+            logger.debug(f"SUCCESS: Session state initialized with {len(relationship_points)} relationships")
 
             # Step 4: Create agents with relationship context
             logger.info(f"🤖 Creating agents for {len(story.characters)} characters...")
             character_agents = await self._create_character_agents(story, actor, initial_state)
-            logger.info(f"✅ Created {len(character_agents)} character agents with relationship awareness")
+            logger.info(f"SUCCESS: Created {len(character_agents)} character agents with relationship awareness")
 
             # Step 5: Store in database
             async with db_registry.async_session() as session:
@@ -237,7 +237,7 @@ class SessionManager:
                     await session.flush()
                     await session.refresh(session_orm)
 
-                logger.info(f"✅ Session created: {session_id}")
+                logger.info(f"SUCCESS: Session created: {session_id}")
 
                 # Get first scene
                 first_scene = story.scenes[0]
@@ -252,7 +252,7 @@ class SessionManager:
                 # Player can only talk TO other characters, not to themselves
                 available_characters = [char.character_id for char in story.characters if char.character_id and not char.is_main_character]
 
-                logger.info(f"✅ Available characters: {', '.join(available_characters)}")
+                logger.info(f"SUCCESS: Available characters: {', '.join(available_characters)}")
 
                 return SessionStartResponse(
                     success=True,
@@ -273,11 +273,11 @@ class SessionManager:
                 )
 
         except ValueError as e:
-            logger.error(f"❌ Session start failed (validation): {e}")
+            logger.error(f"ERROR: Session start failed (validation): {e}")
             raise
 
         except Exception as e:
-            logger.error(f"❌ Session start failed (unexpected): {e}", exc_info=True)
+            logger.error(f"ERROR: Session start failed (unexpected): {e}", exc_info=True)
             # Cleanup any created agents
             if "character_agents" in locals():
                 await self._cleanup_agents(character_agents, actor)
@@ -305,25 +305,25 @@ class SessionManager:
         Raises:
             ValueError: No active session found for this story
         """
-        logger.info(f"▶️ Resuming session for story: {story_id}")
+        logger.info(f"RESUME: Resuming session for story: {story_id}")
 
         try:
             # Find active session for this story
             session_data = await self._get_active_session(actor.id, story_id, actor)
             if not session_data:
-                logger.error(f"❌ No active session found for story: {story_id}")
+                logger.error(f"ERROR: No active session found for story: {story_id}")
                 raise ValueError(f"No active session found for story '{story_id}'. Start a new session first.")
 
             # Get story
             story = await self.story_manager.get_story(session_data.story_id, actor)
             if not story:
-                logger.error(f"❌ Story not found: {session_data.story_id}")
+                logger.error(f"ERROR: Story not found: {session_data.story_id}")
                 raise ValueError(f"Story '{session_data.story_id}' not found")
 
             # Get current scene
             current_scene_num = session_data.state.current_scene_number
             if current_scene_num > len(story.scenes):
-                logger.warning(f"⚠️ Scene {current_scene_num} out of range, resetting to last scene")
+                logger.warning(f"WARNING: Scene {current_scene_num} out of range, resetting to last scene")
                 current_scene_num = len(story.scenes)
 
             current_scene = story.scenes[current_scene_num - 1]  # 1-indexed
@@ -336,7 +336,7 @@ class SessionManager:
                 server=server,
             )
 
-            logger.info(f"✅ Session resumed: {session_data.session_id}, Scene {current_scene_num}")
+            logger.info(f"SUCCESS: Session resumed: {session_data.session_id}, Scene {current_scene_num}")
 
             return SessionResume(
                 success=True,
@@ -348,11 +348,11 @@ class SessionManager:
             )
 
         except ValueError as e:
-            logger.error(f"❌ Session resume failed: {e}")
+            logger.error(f"ERROR: Session resume failed: {e}")
             raise
 
         except Exception as e:
-            logger.error(f"❌ Session resume failed (unexpected): {e}", exc_info=True)
+            logger.error(f"ERROR: Session resume failed (unexpected): {e}", exc_info=True)
             raise Exception(f"Failed to resume session: {str(e)}") from e
 
     async def get_recent_messages(
@@ -414,7 +414,7 @@ class SessionManager:
                     if msg.role == MessageRole.assistant:
                         dialogue_text = self._extract_dialogue_text(msg)
                         if dialogue_text:
-                            logger.info(f"    ✅ Extracted dialogue: {dialogue_text[:50]}...")
+                            logger.info(f"    SUCCESS: Extracted dialogue: {dialogue_text[:50]}...")
                             all_messages.append({
                                 "character": char_id,
                                 "message": dialogue_text,
@@ -422,13 +422,13 @@ class SessionManager:
                                 "role": "assistant"
                             })
                         else:
-                            logger.info(f"    ❌ No dialogue extracted from assistant message")
+                            logger.info(f"    ERROR: No dialogue extracted from assistant message")
                     
                     # Handle user messages (player input)
                     elif msg.role == MessageRole.user:
                         user_text = self._extract_user_text(msg)
                         if user_text:
-                            logger.info(f"    ✅ Extracted user text: {user_text[:50]}...")
+                            logger.info(f"    SUCCESS: Extracted user text: {user_text[:50]}...")
                             all_messages.append({
                                 "character": player_name,  # FIX: Use actual main character name
                                 "message": user_text,
@@ -436,10 +436,10 @@ class SessionManager:
                                 "role": "user"
                             })
                         else:
-                            logger.info(f"    ❌ No text extracted from user message")
+                            logger.info(f"    ERROR: No text extracted from user message")
             
             except Exception as e:
-                logger.warning(f"⚠️ Failed to get messages for agent {agent_id} (char: {char_id}): {e}")
+                logger.warning(f"WARNING: Failed to get messages for agent {agent_id} (char: {char_id}): {e}")
                 continue
         
         # Sort by timestamp (chronological order)
@@ -447,7 +447,7 @@ class SessionManager:
         
         # Return last N messages
         recent = all_messages[-limit:] if all_messages else []
-        logger.info(f"✅ Retrieved {len(recent)} recent messages from {len(session_data.character_agents)} agents")
+        logger.info(f"SUCCESS: Retrieved {len(recent)} recent messages from {len(session_data.character_agents)} agents")
         return recent
 
     def _extract_dialogue_text(self, message: Message) -> Optional[str]:
@@ -499,26 +499,26 @@ class SessionManager:
         Returns:
             Restart response with new session ID
         """
-        logger.info(f"🔄 Restarting session: {session_id}")
+        logger.info(f"RESTART: Restarting session: {session_id}")
 
         try:
             # Get existing session to know which story
             old_session = await self._get_session_by_id(session_id, actor)
             if not old_session:
-                logger.error(f"❌ Session not found: {session_id}")
+                logger.error(f"ERROR: Session not found: {session_id}")
                 raise ValueError(f"Session '{session_id}' not found")
 
             story_id = old_session.story_id
 
             # Delete old session (including agents)
             await self._delete_session_internal(session_id, actor)
-            logger.info(f"✅ Old session deleted: {session_id}")
+            logger.info(f"SUCCESS: Old session deleted: {session_id}")
 
             # Start new session
             session_create = SessionCreate(story_id=story_id)
             start_response = await self.start_session(session_create, actor)
 
-            logger.info(f"✅ Session restarted: {start_response.session_id}")
+            logger.info(f"SUCCESS: Session restarted: {start_response.session_id}")
 
             return SessionRestartResponse(
                 success=True,
@@ -527,11 +527,11 @@ class SessionManager:
             )
 
         except ValueError as e:
-            logger.error(f"❌ Session restart failed: {e}")
+            logger.error(f"ERROR: Session restart failed: {e}")
             raise
 
         except Exception as e:
-            logger.error(f"❌ Session restart failed (unexpected): {e}", exc_info=True)
+            logger.error(f"ERROR: Session restart failed (unexpected): {e}", exc_info=True)
             raise Exception(f"Failed to restart session: {str(e)}") from e
 
     async def delete_session(
@@ -549,7 +549,7 @@ class SessionManager:
         Returns:
             True if deleted, False if not found
         """
-        logger.info(f"🗑️ Deleting session: {session_id}")
+        logger.info(f"DELETE: Deleting session: {session_id}")
         return await self._delete_session_internal(session_id, actor)
 
     # ============================================================
@@ -583,7 +583,7 @@ class SessionManager:
         for character in story.characters:
             # 🎮 FIRST-PERSON MODE: Skip main character (player controls them)
             if character.is_main_character:
-                logger.info(f"  ⏭️ Skipping main character (player-controlled): {character.name}")
+                logger.info(f"  SKIP: Skipping main character (player-controlled): {character.name}")
                 continue
 
             try:
@@ -669,7 +669,7 @@ class SessionManager:
                 create_agent = CreateAgent(
                     name=f"Story-{character.name}-{character.character_id}",
                     description=f"Character from story '{story.title}': {character.name}",
-                    memory_blocks=memory_blocks,  # ✅ NEW: Core memory blocks!
+                    memory_blocks=memory_blocks,  # SUCCESS: NEW: Core memory blocks!
                     agent_type=AgentType.memgpt_agent,
                     llm_config=llm_config,
                     embedding_config=embedding_config,
@@ -686,10 +686,10 @@ class SessionManager:
                 # Use character.name (not character_id) for user-friendly character identification
                 character_agents[character.name] = agent.id
 
-                logger.debug(f"    ✅ Created agent {agent.id} for {character.name}")
+                logger.debug(f"    SUCCESS: Created agent {agent.id} for {character.name}")
 
             except Exception as e:
-                logger.error(f"    ❌ Failed to create agent for {character.name}: {e}")
+                logger.error(f"    ERROR: Failed to create agent for {character.name}: {e}")
                 # Cleanup already created agents
                 await self._cleanup_agents(character_agents, actor)
                 raise Exception(f"Failed to create agent for character '{character.name}': {str(e)}") from e
@@ -1134,9 +1134,9 @@ class SessionManager:
         for char_id, agent_id in character_agents.items():
             try:
                 await self.agent_manager.delete_agent(agent_id, actor=actor)
-                logger.debug(f"  ✅ Deleted agent {agent_id} for {char_id}")
+                logger.debug(f"  SUCCESS: Deleted agent {agent_id} for {char_id}")
             except Exception as e:
-                logger.error(f"  ❌ Failed to delete agent {agent_id}: {e}")
+                logger.error(f"  ERROR: Failed to delete agent {agent_id}: {e}")
 
     async def _get_active_session(
         self,
@@ -1164,7 +1164,7 @@ class SessionManager:
                     return None
 
         except Exception as e:
-            logger.error(f"❌ Error checking active session: {e}")
+            logger.error(f"ERROR: Error checking active session: {e}")
             return None
 
     async def _get_session_by_id(
@@ -1190,7 +1190,7 @@ class SessionManager:
                     return None
 
         except Exception as e:
-            logger.error(f"❌ Error getting session {session_id}: {e}")
+            logger.error(f"ERROR: Error getting session {session_id}: {e}")
             return None
 
     async def _delete_session_internal(
@@ -1209,9 +1209,9 @@ class SessionManager:
             for char_id, agent_id in session_data.character_agents.items():
                 try:
                     await self.agent_manager.delete_agent(agent_id, actor=actor)
-                    logger.debug(f"  ✅ Deleted agent {agent_id} for {char_id}")
+                    logger.debug(f"  SUCCESS: Deleted agent {agent_id} for {char_id}")
                 except Exception as e:
-                    logger.warning(f"  ⚠️ Failed to delete agent {agent_id}: {e}")
+                    logger.warning(f"  WARNING: Failed to delete agent {agent_id}: {e}")
 
             # Delete session from database
             async with self.db.get_async_session() as session:
@@ -1224,11 +1224,11 @@ class SessionManager:
                 await session.execute(delete_stmt)
                 await session.commit()
 
-            logger.info(f"✅ Session deleted: {session_id}")
+            logger.info(f"SUCCESS: Session deleted: {session_id}")
             return True
 
         except Exception as e:
-            logger.error(f"❌ Error deleting session {session_id}: {e}", exc_info=True)
+            logger.error(f"ERROR: Error deleting session {session_id}: {e}", exc_info=True)
             return False
 
     def _convert_to_schema(self, session_orm: StorySessionORM) -> StorySession:
@@ -1381,7 +1381,7 @@ class SessionManager:
                 if not dependencies_met:
                     # Dependencies not met - skip this beat for now
                     priority = beat.get("priority", "required")
-                    logger.debug(f"  ⏭️ Skipping {beat_type} {beat_id} - dependencies not met: {requires_beats} " f"(priority: {priority})")
+                    logger.debug(f"  SKIP: Skipping {beat_type} {beat_id} - dependencies not met: {requires_beats} " f"(priority: {priority})")
                     continue  # Try next beat
 
                 # IMM-11: Check instruction conditional
@@ -1802,10 +1802,10 @@ class SessionManager:
             actor: User making the request
         """
         if not story.relationships:
-            logger.debug(f"  ℹ️ No relationships to update (session: {session_id})")
+            logger.debug(f"  INFO: No relationships to update (session: {session_id})")
             return
         
-        logger.info(f"  🔄 Updating relationship memory for {len(character_agents)} agents...")
+        logger.info(f"  RESTART: Updating relationship memory for {len(character_agents)} agents...")
         
         from letta.schemas.block import BlockUpdate
         import asyncio
@@ -1828,7 +1828,7 @@ class SessionManager:
                         break
                 
                 if not relationships_block:
-                    logger.warning(f"    ⚠️ No relationships block for {char_id} (agent {agent_id})")
+                    logger.warning(f"    WARNING: No relationships block for {char_id} (agent {agent_id})")
                     return
                 
                 # Build updated relationships context
@@ -1841,10 +1841,10 @@ class SessionManager:
                     actor=actor,
                 )
                 
-                logger.debug(f"    ✅ Updated relationships for {char_id}")
+                logger.debug(f"    SUCCESS: Updated relationships for {char_id}")
                 
             except Exception as e:
-                logger.error(f"    ❌ Failed to update relationships for {char_id}: {e}")
+                logger.error(f"    ERROR: Failed to update relationships for {char_id}: {e}")
         
         # Create character lookup for agent updates (using character.name as key)
         char_lookup = {char.name: char for char in story.characters if char.name}
@@ -1857,7 +1857,7 @@ class SessionManager:
         ]
         
         await asyncio.gather(*update_tasks)
-        logger.info(f"  ✅ Relationship memory updated for all agents")
+        logger.info(f"  SUCCESS: Relationship memory updated for all agents")
 
     def apply_relationship_effects(
         self,
@@ -1884,13 +1884,13 @@ class SessionManager:
             ValueError: If choice not found or invalid relationship reference
         """
         if not story.relationships:
-            logger.debug("  ℹ️ Story has no relationships defined, skipping effect application")
+            logger.debug("  INFO: Story has no relationships defined, skipping effect application")
             return
         
         # Extract choices from instruction
         choices = current_instruction.get("choices")
         if not choices:
-            logger.debug("  ℹ️ Current instruction has no choices")
+            logger.debug("  INFO: Current instruction has no choices")
             return
         
         # Find the selected choice
@@ -1910,11 +1910,11 @@ class SessionManager:
                     break
         
         if not selected_choice:
-            logger.warning(f"  ⚠️ Choice {choice_id} not found in current instruction")
+            logger.warning(f"  WARNING: Choice {choice_id} not found in current instruction")
             return
         
         if not selected_choice.relationship_effects:
-            logger.debug(f"  ℹ️ Choice {choice_id} has no relationship effects")
+            logger.debug(f"  INFO: Choice {choice_id} has no relationship effects")
             return
         
         # Build relationship lookup: (character, type) -> relationship_def
@@ -1926,7 +1926,7 @@ class SessionManager:
             rel_def = rel_lookup.get((effect.character, effect.type))
             if not rel_def:
                 logger.warning(
-                    f"  ⚠️ Unknown relationship in effect: character='{effect.character}', type='{effect.type}'"
+                    f"  WARNING: Unknown relationship in effect: character='{effect.character}', type='{effect.type}'"
                 )
                 continue
             
@@ -1936,7 +1936,7 @@ class SessionManager:
             try:
                 change = int(effect.effect)
             except ValueError:
-                logger.warning(f"  ⚠️ Invalid effect value: '{effect.effect}' (expected '+10' or '-5')")
+                logger.warning(f"  WARNING: Invalid effect value: '{effect.effect}' (expected '+10' or '-5')")
                 continue
             
             # Update points (using array helper methods)
@@ -2022,7 +2022,7 @@ class SessionManager:
                         return False
                     
                     logger.debug(
-                        f"  ✅ Conditional PASSED: {conditional.relationship_id} level {level}"
+                        f"  SUCCESS: Conditional PASSED: {conditional.relationship_id} level {level}"
                     )
                     return True
             
@@ -2037,7 +2037,7 @@ class SessionManager:
             for choice in session_state.player_choices:
                 if choice.get("choice_id") == conditional.choice_id:
                     logger.debug(
-                        f"  ✅ Conditional PASSED: Player made choice {conditional.choice_id}"
+                        f"  SUCCESS: Conditional PASSED: Player made choice {conditional.choice_id}"
                     )
                     return True
             
@@ -2058,7 +2058,7 @@ class SessionManager:
                     )
                     return False
             
-            logger.debug("  ✅ Conditional PASSED: All sub-conditions met")
+            logger.debug("  SUCCESS: Conditional PASSED: All sub-conditions met")
             return True
         
         elif conditional.requirement_type == "any":
@@ -2068,7 +2068,7 @@ class SessionManager:
             
             for sub_cond in conditional.sub_conditions:
                 if self.evaluate_conditional(sub_cond, session_state):
-                    logger.debug("  ✅ Conditional PASSED: At least one sub-condition met")
+                    logger.debug("  SUCCESS: Conditional PASSED: At least one sub-condition met")
                     return True
             
             logger.debug(
@@ -2078,7 +2078,7 @@ class SessionManager:
         
         # Unknown requirement type - default to True (safe fallback)
         logger.warning(
-            f"  ⚠️ Unknown conditional requirement_type: {conditional.requirement_type}"
+            f"  WARNING: Unknown conditional requirement_type: {conditional.requirement_type}"
         )
         return True
 
@@ -2132,7 +2132,7 @@ class SessionManager:
                     current_version = current_version_row[0] if current_version_row else None
                     
                     logger.warning(
-                        f"  ⚠️ Version mismatch for session {session_id}: "
+                        f"  WARNING: Version mismatch for session {session_id}: "
                         f"expected={expected_version}, current={current_version}"
                     )
                     return {
@@ -2141,7 +2141,7 @@ class SessionManager:
                     }
                 else:
                     logger.debug(
-                        f"  ✅ Session state updated: {session_id} "
+                        f"  SUCCESS: Session state updated: {session_id} "
                         f"(version: {expected_version} → {expected_version + 1})"
                     )
                     return {
@@ -2203,7 +2203,7 @@ class SessionManager:
             }
         """
         logger.info(
-            f"🔄 Updating scene memory blocks: "
+            f"RESTART: Updating scene memory blocks: "
             f"session={session_id}, new_scene={new_scene_number}"
         )
         
@@ -2219,7 +2219,7 @@ class SessionManager:
         # Step 2: Validate scene number
         if new_scene_number < 1 or new_scene_number > len(story.scenes):
             logger.warning(
-                f"  ⚠️ Invalid scene number: {new_scene_number} "
+                f"  WARNING: Invalid scene number: {new_scene_number} "
                 f"(valid range: 1-{len(story.scenes)})"
             )
             return {
@@ -2262,7 +2262,7 @@ class SessionManager:
                 
                 if not scene_block:
                     logger.warning(
-                        f"  ⚠️ No current_scene block found for {char_id} "
+                        f"  WARNING: No current_scene block found for {char_id} "
                         f"(agent {agent_id})"
                     )
                     return {
@@ -2279,7 +2279,7 @@ class SessionManager:
                     actor=actor,
                 )
                 
-                logger.debug(f"  ✅ Updated scene memory: {char_id} (agent {agent_id})")
+                logger.debug(f"  SUCCESS: Updated scene memory: {char_id} (agent {agent_id})")
                 return {
                     "char_id": char_id,
                     "agent_id": agent_id,
@@ -2288,7 +2288,7 @@ class SessionManager:
                 
             except Exception as e:
                 logger.error(
-                    f"  ❌ Failed to update scene memory for {char_id}: {e}",
+                    f"  ERROR: Failed to update scene memory for {char_id}: {e}",
                     exc_info=True,
                 )
                 return {
@@ -2314,12 +2314,12 @@ class SessionManager:
         # Step 6: Log summary
         if failed_count == 0:
             logger.info(
-                f"✅ Successfully updated scene memory for all {updated_count} agents "
+                f"SUCCESS: Successfully updated scene memory for all {updated_count} agents "
                 f"(Scene {new_scene_number}: {new_scene.title})"
             )
         else:
             logger.warning(
-                f"⚠️ Updated {updated_count}/{total_count} agents "
+                f"WARNING: Updated {updated_count}/{total_count} agents "
                 f"({failed_count} failed)"
             )
             for result in results:

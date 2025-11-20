@@ -180,7 +180,7 @@ async def upload_story(
             story_id = f"story-{story.id}"
             existing = await story_manager.get_story(story_id, actor)
             if existing:
-                logger.info(f"  🔄 Overwrite mode: Deleting existing story {story_id}")
+                logger.info(f"  Overwrite mode: Deleting existing story {story_id}")
                 
                 # Count sessions before deleting
                 from sqlalchemy import select, func
@@ -225,6 +225,10 @@ async def upload_story(
         
         logger.info(f"SUCCESS: Story uploaded: {response.story_id} (overwrite={overwrite}, sessions_deleted={sessions_deleted})")
         return response
+    
+    except HTTPException:
+        # Re-raise HTTPException without modification (e.g., from validator)
+        raise
     
     except ValueError as e:
         logger.error(f"ERROR: Story upload validation error: {e}")
@@ -532,7 +536,7 @@ async def restart_session(
     - 500: Deletion or creation error
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=actor_id)
-    logger.info(f"🔄 Session restart request: {session_id} (user: {actor.id})")
+    logger.info(f"Session restart request: {session_id} (user: {actor.id})")
     
     try:
         session_manager = SessionManager()
