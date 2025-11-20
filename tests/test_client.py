@@ -681,11 +681,15 @@ def test_timezone(client: Letta):
     # second message is assistant message
     assert response.messages[1].message_type == "assistant_message"
     # content is similar to current timezone
+    # Accept multiple timezone format variations (LLM may respond differently)
+    content_lower = response.messages[1].content.lower()
     assert (
-        "America/Los_Angeles" in response.messages[1].content
-        or "PDT" in response.messages[1].content
-        or "PST" in response.messages[1].content
-    )
+        "america/los_angeles" in content_lower
+        or "pdt" in content_lower
+        or "pst" in content_lower
+        or "pacific" in content_lower  # Also accept "Pacific" timezone references
+        or "los angeles" in content_lower
+    ), f"Expected timezone reference in response, got: {response.messages[1].content}"
 
     # test updating the timezone
     client.agents.modify(agent_id=agent.id, timezone="America/New_York")
