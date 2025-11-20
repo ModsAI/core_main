@@ -203,6 +203,24 @@ class StoryValidator:
                         severity="error",
                         suggestion="Add 'name' field to character"
                     ))
+                
+                if not char.get("age"):
+                    errors.append(ValidationError(
+                        error_type="missing_character_age",
+                        message=f"Character '{char.get('name', idx + 1)}' is missing 'age' field",
+                        location=f"characters[{idx}]",
+                        severity="error",
+                        suggestion="Add 'age' field to character"
+                    ))
+                
+                if not char.get("sex"):
+                    errors.append(ValidationError(
+                        error_type="missing_character_sex",
+                        message=f"Character '{char.get('name', idx + 1)}' is missing 'sex' field",
+                        location=f"characters[{idx}]",
+                        severity="error",
+                        suggestion="Add 'sex' field to character (e.g., 'male', 'female', 'neutral')"
+                    ))
         
         except Exception as e:
             logger.error(f"Error in _validate_characters: {e}")
@@ -214,24 +232,6 @@ class StoryValidator:
                 severity="error",
                 suggestion="Check characters array format"
             ))
-            
-            if not char.get("age"):
-                errors.append(ValidationError(
-                    error_type="missing_character_age",
-                    message=f"Character '{char.get('name', idx + 1)}' is missing 'age' field",
-                    location=f"characters[{idx}]",
-                    severity="error",
-                    suggestion="Add 'age' field to character"
-                ))
-            
-            if not char.get("sex"):
-                errors.append(ValidationError(
-                    error_type="missing_character_sex",
-                    message=f"Character '{char.get('name', idx + 1)}' is missing 'sex' field",
-                    location=f"characters[{idx}]",
-                    severity="error",
-                    suggestion="Add 'sex' field to character (e.g., 'male', 'female', 'neutral')"
-                ))
         
         return errors
     
@@ -404,14 +404,27 @@ class StoryValidator:
                             suggestion=f"Add character '{char_name}' to characters array or fix the name"
                         ))
                 
-                elif inst_type in ["setting", "narration"]:
+                elif inst_type == "narration":
+                    # Narration requires text field (main story content)
                     if not instruction.get("text"):
                         errors.append(ValidationError(
                             error_type="missing_instruction_text",
-                            message=f"Instruction {idx + 1}: {inst_type} instruction missing 'text' field",
+                            message=f"Instruction {idx + 1}: narration instruction missing 'text' field",
                             location=f"instructions[{idx}]",
                             severity="error",
-                            suggestion="Add 'text' field with instruction content"
+                            suggestion="Add 'text' field with narration content"
+                        ))
+                
+                elif inst_type == "setting":
+                    # Setting instructions should have either text OR (title + setting)
+                    # Text is optional for settings since they have title/setting fields
+                    if not instruction.get("text") and not instruction.get("setting"):
+                        errors.append(ValidationError(
+                            error_type="missing_setting_description",
+                            message=f"Instruction {idx + 1}: setting instruction should have 'text' or 'setting' field",
+                            location=f"instructions[{idx}]",
+                            severity="error",
+                            suggestion="Add 'setting' field (e.g., 'School hallway') or 'text' field"
                         ))
         
         except Exception as e:
