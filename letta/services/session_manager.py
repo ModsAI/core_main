@@ -666,12 +666,13 @@ class SessionManager:
                     embedding_chunk_size=300,
                 )
 
-                # Sanitize character name for agent name (remove special characters)
+                # Sanitize character name AND character_id for agent name (remove special characters)
                 # Agent names can only contain alphanumeric, spaces, hyphens, underscores
                 sanitized_name = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '_' for c in character.name)
+                sanitized_char_id = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '_' for c in character.character_id)
                 
                 create_agent = CreateAgent(
-                    name=f"Story-{sanitized_name}-{character.character_id}",
+                    name=f"Story-{sanitized_name}-{sanitized_char_id}",
                     description=f"Character from story '{story.title}': {character.name}",
                     memory_blocks=memory_blocks,  # SUCCESS: NEW: Core memory blocks!
                     agent_type=AgentType.memgpt_agent,
