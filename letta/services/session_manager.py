@@ -81,19 +81,28 @@ class SessionManager:
         return None
 
     @staticmethod
-    def _update_relationship_point(points_array: List, rel_id: str, new_points: int) -> None:
+    def _update_relationship_point(points_array: List, rel_id: str, new_points: int, points_per_level: Optional[int] = None) -> None:
         """Update or add relationship points in array"""
+        # Calculate points in current level for display
+        points_in_level = None
+        if points_per_level and points_per_level > 0:
+            points_in_level = new_points % points_per_level
+        
         for item in points_array:
             if (isinstance(item, dict) and item.get("id") == rel_id) or \
                (hasattr(item, "id") and item.id == rel_id):
                 if isinstance(item, dict):
                     item["points"] = new_points
+                    if points_in_level is not None:
+                        item["points_in_current_level"] = points_in_level
                 else:
                     item.points = new_points
+                    if points_in_level is not None:
+                        item.points_in_current_level = points_in_level
                 return
         # Not found - add new entry
         from letta.schemas.story import RelationshipPoint
-        points_array.append(RelationshipPoint(id=rel_id, points=new_points))
+        points_array.append(RelationshipPoint(id=rel_id, points=new_points, points_in_current_level=points_in_level))
 
     @staticmethod
     def _update_relationship_level(levels_array: List, rel_id: str, new_level: int) -> None:
@@ -185,7 +194,10 @@ class SessionManager:
                     level = min(level, rel.max_levels)
                     level = max(level, 1)  # Floor at 1, not 0
                     
-                    relationship_points.append(RelationshipPoint(id=rel_id, points=starting_points))
+                    # Calculate points in current level for display
+                    points_in_level = starting_points % rel.points_per_level if rel.points_per_level > 0 else None
+                    
+                    relationship_points.append(RelationshipPoint(id=rel_id, points=starting_points, points_in_current_level=points_in_level))
                     relationship_levels.append(RelationshipLevel(id=rel_id, level=level))
                     logger.debug(f"  💝 Initialized relationship {rel_id}: {starting_points} points, level {level}")
 
@@ -1962,7 +1974,7 @@ class SessionManager:
             max_points = rel_def.max_levels * rel_def.points_per_level  # Calculate maximum points
             new_points = max(0, min(max_points, current_points + change))  # Floor at 0, cap at max
             
-            self._update_relationship_point(session_state.relationship_points, rel_id, new_points)
+            self._update_relationship_point(session_state.relationship_points, rel_id, new_points, rel_def.points_per_level)
             
             # Recalculate level (1-based)
             if rel_def.points_per_level > 0:

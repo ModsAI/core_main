@@ -101,6 +101,7 @@ class RelationshipPoint(BaseModel):
     
     id: str = Field(..., description="Relationship ID (e.g., 'tatsuya-friendship')")
     points: int = Field(..., description="Current points for this relationship")
+    points_in_current_level: Optional[int] = Field(None, description="Points within current level (points % pointsPerLevel) for display")
 
 
 class RelationshipLevel(BaseModel):
