@@ -668,8 +668,18 @@ class SessionManager:
 
                 # Sanitize character name AND character_id for agent name (remove special characters)
                 # Agent names can only contain alphanumeric, spaces, hyphens, underscores
-                sanitized_name = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '_' for c in character.name)
-                sanitized_char_id = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '_' for c in character.character_id)
+                # Handle edge cases: ensure both name and character_id exist and are non-empty
+                safe_name = character.name if character.name else "Unknown"
+                safe_char_id = character.character_id if character.character_id else "unknown"
+                
+                sanitized_name = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '_' for c in safe_name)
+                sanitized_char_id = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '_' for c in safe_char_id)
+                
+                # Ensure sanitized values are not empty after sanitization
+                if not sanitized_name.strip():
+                    sanitized_name = "Character"
+                if not sanitized_char_id.strip():
+                    sanitized_char_id = "char"
                 
                 create_agent = CreateAgent(
                     name=f"Story-{sanitized_name}-{sanitized_char_id}",
