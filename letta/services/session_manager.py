@@ -589,7 +589,7 @@ class SessionManager:
         from letta.schemas.agent import CreateAgent
         from letta.schemas.embedding_config import EmbeddingConfig
         from letta.schemas.llm_config import LLMConfig
-        from letta.schemas.memory import CreateBlock
+        from letta.schemas.block import CreateBlock
 
         # Filter to only NPCs (non-main characters)
         npcs = [c for c in story.characters if not c.is_main_character]
@@ -1716,28 +1716,18 @@ class SessionManager:
         else:
             current_scene = story.scenes[current_scene_num - 1]
 
-        # Get current instruction to extract location
-        current_instruction_index = session.state.current_instruction_index
-        current_instruction = None
-        location = "Unknown location"  # Default fallback
-        
-        if current_instruction_index < len(current_scene.instructions):
-            current_instruction = current_scene.instructions[current_instruction_index]
-            # Extract location from instruction
-            # The field is called 'setting' in StoryInstruction schema, not 'location'
-            if isinstance(current_instruction, dict):
-                location = current_instruction.get("setting") or current_instruction.get("location", "Unknown location")
-            elif hasattr(current_instruction, "setting"):
-                location = current_instruction.setting or "Unknown location"
-            elif hasattr(current_instruction, "location"):
-                location = current_instruction.location or "Unknown location"
+        # FIX: Use scene's location instead of current instruction's location
+        # The scene already has the location set from the initial setting instruction
+        # This ensures location persists across all instructions in the scene
+        # (Kon's bug: location was becoming "Unknown location" after advance-story)
+        location = current_scene.location if hasattr(current_scene, 'location') else "Unknown location"
 
         # Build current setting info
         current_setting = CurrentSettingInfo(
             scene_id=current_scene.scene_id,
             scene_number=current_scene.scene_number,
             scene_title=current_scene.title,
-            location=location,  # Use location from current instruction
+            location=location,  # Use location from scene (persists across instructions)
             total_scenes=len(story.scenes),
         )
 
