@@ -591,6 +591,8 @@ class StoryManager:
                             "music_cue": instruction.music_cue,
                             # Multiple choice support (Kon Unity integration)
                             "choices": instruction.choices,
+                            # Internal monologue support (main character thoughts)
+                            "is_internal_monologue": instruction.is_internal_monologue,
                         }
                         current_scene.dialogue_beats.append(dialogue_beat)
                         
@@ -624,6 +626,8 @@ class StoryManager:
                             "music_cue": instruction.music_cue,
                             # Multiple choice support (Kon Unity integration)
                             "choices": instruction.choices,
+                            # Narrator support (prologues and transitions)
+                            "is_narrator": instruction.is_narrator,
                         }
                         # Track characters mentioned in narration choices (for scene presence)
                         if instruction.choices:

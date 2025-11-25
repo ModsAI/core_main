@@ -1527,6 +1527,8 @@ class SessionManager:
                         "music_cue": beat.get("music_cue"),
                         # Multiple choice support
                         "choices": beat.get("choices"),
+                        # Internal monologue support (main character thoughts)
+                        "is_internal_monologue": beat.get("is_internal_monologue", False),
                     }
 
                 elif beat_type == "narration":
@@ -1560,6 +1562,8 @@ class SessionManager:
                         "music_cue": beat.get("music_cue"),
                         # Multiple choice support
                         "choices": beat.get("choices"),
+                        # Narrator support (prologues and transitions)
+                        "is_narrator": beat.get("is_narrator", False),
                     }
 
                 elif beat_type == "action":

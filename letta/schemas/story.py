@@ -82,6 +82,18 @@ class StoryInstruction(BaseModel):
     sfx: Optional[str] = Field(None, description="Sound effect to play")
     music_cue: Optional[str] = Field(None, description="Music cue or track name")
 
+    # Internal thought and narrator support (for Unity rendering)
+    is_internal_monologue: Optional[bool] = Field(
+        False,
+        alias="isInternalMonologue",
+        description="True if this dialogue is internal thought (not spoken aloud). Main character only. Unity renders differently."
+    )
+    is_narrator: Optional[bool] = Field(
+        False,
+        alias="isNarrator",
+        description="True if this is narrator voice (prologue/transition). Can be used with narration type or narrator character."
+    )
+
     # Multiple choice support (for Unity choice selections)
     choices: Optional[List["StoryChoice"]] = Field(None, description="Multiple choice options with optional relationship effects")
 
