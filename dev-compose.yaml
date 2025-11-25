@@ -3,7 +3,7 @@ version: '3.8'
 services:
   postgres:
     image: ankane/pgvector:latest
-    container_name: letta-postgres-dev
+    container_name: postgres
     environment:
       POSTGRES_USER: letta
       POSTGRES_PASSWORD: letta
