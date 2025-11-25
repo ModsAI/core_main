@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: letta-postgres-dev
+    environment:
+      POSTGRES_USER: letta
+      POSTGRES_PASSWORD: letta
+      POSTGRES_DB: letta
+    ports:
+      - "8888:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U letta"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+
