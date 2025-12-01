@@ -119,6 +119,7 @@ class StoryManager:
                         story_id=story_id,
                         title=story_upload.title,
                         description=story_upload.description,
+                        version=story_upload.version,  # Store version for cache invalidation
                         story_json=processed_story_json,  # Processed JSON with character_id and relationship_id
                         scenes_json={"scenes": scenes_dicts},  # Processed scenes
                         story_metadata={
@@ -216,6 +217,7 @@ class StoryManager:
                         characters=characters,
                         relationships=relationships,
                         scenes=scenes,
+                        version=story_orm.version,  # Include version for cache checks
                         metadata=story_orm.story_metadata or {},
                     )
                     

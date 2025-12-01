@@ -35,6 +35,9 @@ class Story(SqlalchemyBase):
     story_json: Mapped[dict] = mapped_column(JSON, nullable=False)  # Original story structure
     scenes_json: Mapped[dict] = mapped_column(JSON, nullable=False)  # Processed scenes
 
+    # Version field for cache invalidation
+    version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
     # Metadata (using column name 'metadata_' to avoid SQLAlchemy reserved name)
     story_metadata: Mapped[Optional[dict]] = mapped_column("metadata_", JSON, nullable=True)
 

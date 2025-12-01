@@ -1837,6 +1837,7 @@ class SessionManager:
             story_id=story.story_id,
             title=story.title,
             description=story.description,
+            version=story.version,  # Include version for cache checking
             characters=story.characters,
             player_character=player_character,
             npcs=npcs,

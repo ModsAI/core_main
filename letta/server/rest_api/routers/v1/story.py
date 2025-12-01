@@ -176,11 +176,26 @@ async def upload_story(
         
         # If overwrite=true, delete existing story first
         sessions_deleted = 0
+        version_changed = False
+        old_version = None
+        new_version = story.version
+        
         if overwrite:
             story_id = f"story-{story.id}"
             existing = await story_manager.get_story(story_id, actor)
             if existing:
                 logger.info(f"  Overwrite mode: Deleting existing story {story_id}")
+                
+                # Check for version change (for cache invalidation signaling)
+                old_version = existing.version
+                if old_version != new_version:
+                    version_changed = True
+                    logger.warning(
+                        f"  🔄 CACHE INVALIDATION: Story version changed from '{old_version}' to '{new_version}'. "
+                        f"Clients should invalidate cached data for story '{story_id}'."
+                    )
+                else:
+                    logger.info(f"  INFO: Story version unchanged ('{old_version}')")
                 
                 # Count sessions before deleting
                 from sqlalchemy import select, func
@@ -211,7 +226,7 @@ async def upload_story(
         
         response = await story_manager.upload_story(story, actor)
         
-        # Add session invalidation warning to response if sessions were deleted
+        # Add session invalidation and version change warnings to response
         if sessions_deleted > 0:
             response.instructions.insert(0, 
                 f"WARNING: IMPORTANT: {sessions_deleted} existing session(s) were invalidated during overwrite"
@@ -221,6 +236,12 @@ async def upload_story(
             )
             response.instructions.insert(2,
                 "Do NOT reuse old session IDs after overwrite - they have been deleted"
+            )
+        
+        # Add cache invalidation notice if version changed
+        if version_changed:
+            response.instructions.insert(0,
+                f"CACHE INVALIDATION: Story version changed from '{old_version}' to '{new_version}'. Clients should clear cached story data."
             )
         
         logger.info(f"SUCCESS: Story uploaded: {response.story_id} (overwrite={overwrite}, sessions_deleted={sessions_deleted})")

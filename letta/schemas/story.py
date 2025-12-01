@@ -240,6 +240,7 @@ class StoryUpload(BaseModel):
     # Optional metadata
     description: Optional[str] = Field(None, description="Story description")
     tags: Optional[List[str]] = Field(None, description="Story tags")
+    version: Optional[str] = Field(None, description="Story version for cache invalidation (e.g., '1.0', '2.0')")
     scene_progression_settings: Optional[Dict[str, Any]] = Field(
         None,
         description="Scene progression configuration (optional)",
@@ -281,6 +282,7 @@ class Story(BaseModel):
     characters: List[StoryCharacter] = Field(..., description="Story characters")
     relationships: Optional[List[StoryCharacterRelationship]] = Field(None, description="Character relationships")
     scenes: List[Scene] = Field(..., description="Story scenes")
+    version: Optional[str] = Field(None, description="Story version for cache invalidation")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
@@ -660,6 +662,7 @@ class StoryDetailResponse(BaseModel):
     story_id: str = Field(..., description="Story identifier")
     title: str = Field(..., description="Story title")
     description: Optional[str] = Field(None, description="Story description")
+    version: Optional[str] = Field(None, description="Story version for cache invalidation")
 
     # Characters
     characters: List[StoryCharacter] = Field(..., description="All story characters")
