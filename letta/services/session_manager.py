@@ -81,19 +81,40 @@ class SessionManager:
         return None
 
     @staticmethod
-    def _update_relationship_point(points_array: List, rel_id: str, new_points: int) -> None:
-        """Update or add relationship points in array"""
+    def _update_relationship_point(points_array: List, rel_id: str, new_points: int, points_per_level: int = 100) -> None:
+        """
+        Update or add relationship points in array.
+        
+        IMPORTANT: Also calculates and sets points_in_current_level for Unity display.
+        This is the field Unity uses to show progress bars that reset after level up.
+        
+        Args:
+            points_array: List of RelationshipPoint objects or dicts
+            rel_id: Relationship ID to update
+            new_points: New total points value
+            points_per_level: Points required per level (for calculating display value)
+        """
+        # Calculate points within current level for display (resets after level up)
+        # e.g., if new_points=150 and points_per_level=100, points_in_current_level=50
+        points_in_current_level = new_points % points_per_level if points_per_level > 0 else 0
+        
         for item in points_array:
             if (isinstance(item, dict) and item.get("id") == rel_id) or \
                (hasattr(item, "id") and item.id == rel_id):
                 if isinstance(item, dict):
                     item["points"] = new_points
+                    item["points_in_current_level"] = points_in_current_level
                 else:
                     item.points = new_points
+                    item.points_in_current_level = points_in_current_level
                 return
         # Not found - add new entry
         from letta.schemas.story import RelationshipPoint
-        points_array.append(RelationshipPoint(id=rel_id, points=new_points))
+        points_array.append(RelationshipPoint(
+            id=rel_id, 
+            points=new_points,
+            points_in_current_level=points_in_current_level
+        ))
 
     @staticmethod
     def _update_relationship_level(levels_array: List, rel_id: str, new_level: int) -> None:
@@ -185,9 +206,16 @@ class SessionManager:
                     level = min(level, rel.max_levels)
                     level = max(level, 1)  # Floor at 1, not 0
                     
-                    relationship_points.append(RelationshipPoint(id=rel_id, points=starting_points))
+                    # Calculate points_in_current_level for Unity display (resets after level up)
+                    points_in_current_level = starting_points % rel.points_per_level if rel.points_per_level > 0 else 0
+                    
+                    relationship_points.append(RelationshipPoint(
+                        id=rel_id, 
+                        points=starting_points,
+                        points_in_current_level=points_in_current_level
+                    ))
                     relationship_levels.append(RelationshipLevel(id=rel_id, level=level))
-                    logger.debug(f"  💝 Initialized relationship {rel_id}: {starting_points} points, level {level}")
+                    logger.debug(f"  💝 Initialized relationship {rel_id}: {starting_points} points (display: {points_in_current_level}), level {level}")
 
             # Get first scene's characters for scene-based dialogue validation
             first_scene = story.scenes[0] if story.scenes else None
@@ -2013,7 +2041,13 @@ class SessionManager:
             max_points = rel_def.max_levels * rel_def.points_per_level  # Calculate maximum points
             new_points = max(0, min(max_points, current_points + change))  # Floor at 0, cap at max
             
-            self._update_relationship_point(session_state.relationship_points, rel_id, new_points)
+            # Pass points_per_level so we can calculate points_in_current_level for Unity display
+            self._update_relationship_point(
+                session_state.relationship_points, 
+                rel_id, 
+                new_points,
+                points_per_level=rel_def.points_per_level
+            )
             
             # Recalculate level (1-based)
             if rel_def.points_per_level > 0:
