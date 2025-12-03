@@ -217,7 +217,8 @@ class StoryManager:
                         characters=characters,
                         relationships=relationships,
                         scenes=scenes,
-                        version=story_orm.version,  # Include version for cache checks
+                        # FIX: Use getattr to handle missing version column gracefully (backwards compatibility)
+                        version=getattr(story_orm, 'version', None),
                         metadata=story_orm.story_metadata or {},
                     )
                     

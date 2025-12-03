@@ -1258,10 +1258,19 @@ class SessionManager:
 
                     if session_orm:
                         return self._convert_to_schema(session_orm)
+                    
+                    # Session not found - log for debugging
+                    logger.warning(f"⚠️ Session not found: {session_id} (org: {actor.organization_id})")
                     return None
 
         except Exception as e:
-            logger.error(f"ERROR: Error getting session {session_id}: {e}")
+            # FIX: Log full exception with stack trace for debugging
+            # This helps diagnose issues like missing database columns
+            logger.error(
+                f"❌ ERROR getting session {session_id}: {e}\n"
+                f"   User: {actor.id}, Org: {actor.organization_id}",
+                exc_info=True  # Include full stack trace
+            )
             return None
 
     async def _delete_session_internal(
@@ -1322,7 +1331,9 @@ class SessionManager:
             created_at=session_orm.created_at,
             updated_at=session_orm.updated_at,
             completed_at=session_orm.completed_at,
-            version=session_orm.version,  # Include version for optimistic locking
+            # FIX: Use getattr to handle missing version column gracefully (backwards compatibility)
+            # This prevents 404 errors if database migration hasn't been run yet
+            version=getattr(session_orm, 'version', None),
         )
 
     # ============================================================
