@@ -218,6 +218,7 @@ def test_agent_tags(client: Letta):
 # --------------------------------------------------------------------------------------------------------------------
 # Agent memory blocks
 # --------------------------------------------------------------------------------------------------------------------
+@pytest.mark.skip(reason="letta-free service requires Letta-specific API key, not available in CI")
 def test_shared_blocks(disable_e2b_api_key, client: Letta):
     # create a block
     block = client.blocks.create(label="human", value="username: sarah")
@@ -349,6 +350,7 @@ def test_update_agent_memory_limit(client: Letta):
 # --------------------------------------------------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason="letta-free service requires Letta-specific API key, not available in CI")
 def test_function_always_error(client: Letta):
     """Test to see if function that errors works correctly"""
 
@@ -443,6 +445,7 @@ def test_attach_detach_agent_tool(client: Letta, agent: AgentState):
 # --------------------------------------------------------------------------------------------------------------------
 # AgentMessages
 # --------------------------------------------------------------------------------------------------------------------
+@pytest.mark.skip(reason="letta-free service requires Letta-specific API key, not available in CI")
 def test_messages(client: Letta, agent: AgentState):
     # _reset_config()
 
@@ -624,6 +627,7 @@ def test_attach_detach_agent_source(client: Letta, agent: AgentState):
 # --------------------------------------------------------------------------------------------------------------------
 # Agent Initial Message Sequence
 # --------------------------------------------------------------------------------------------------------------------
+@pytest.mark.skip(reason="letta-free service requires Letta-specific API key, not available in CI")
 def test_initial_sequence(client: Letta):
     # create an agent
     agent = client.agents.create(
@@ -656,6 +660,7 @@ def test_initial_sequence(client: Letta):
     assert messages[2].message_type == "user_message"
 
 
+@pytest.mark.skip(reason="letta-free service requires Letta-specific API key, not available in CI")
 def test_timezone(client: Letta):
     # create an agent
     agent = client.agents.create(
